@@ -1,57 +1,74 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const User = require('./User');
+const ServiceRequest = require('./ServiceRequest');
 
-const chatSchema = new mongoose.Schema({
-  // Référence vers la demande de service qui a créé ce chat
+const Chat = sequelize.define('Chat', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   serviceRequestId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'ServiceRequest',
-    required: true,
-    unique: true // Un chat par demande de service
+    type: DataTypes.UUID,
+    allowNull: false,
+    unique: true,
+    field: 'service_request_id',
+    references: {
+      model: ServiceRequest,
+      key: 'id'
+    }
   },
-  
-  // Participants du chat
   clientId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    field: 'client_id',
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
-  
   demenageurId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    field: 'demenageur_id',
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
-  
-  // Statut du chat
   status: {
-    type: String,
-    enum: ['active', 'archived', 'closed'],
-    default: 'active'
+    type: DataTypes.ENUM('active', 'archived', 'closed'),
+    defaultValue: 'active'
   },
-  
-  // Dernière activité
   lastMessageAt: {
-    type: Date,
-    default: Date.now
+    type: DataTypes.DATE,
+    defaultValue: DataTypes.NOW,
+    field: 'last_message_at'
   },
-  
-  // Messages non lus par client et déménageur
   unreadByClient: {
-    type: Number,
-    default: 0
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+    field: 'unread_by_client'
   },
-  
   unreadByDemenageur: {
-    type: Number,
-    default: 0
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+    field: 'unread_by_demenageur'
   }
 }, {
-  timestamps: true
+  tableName: 'chats',
+  timestamps: true,
+  underscored: true,
+  indexes: [
+    { fields: ['client_id', 'status'] },
+    { fields: ['demenageur_id', 'status'] },
+    { fields: ['service_request_id'] }
+  ]
 });
 
-// Index pour optimiser les requêtes
-chatSchema.index({ clientId: 1, status: 1 });
-chatSchema.index({ demenageurId: 1, status: 1 });
-chatSchema.index({ serviceRequestId: 1 });
+Chat.belongsTo(ServiceRequest, { foreignKey: 'serviceRequestId' });
+Chat.belongsTo(User, { foreignKey: 'clientId', as: 'client' });
+Chat.belongsTo(User, { foreignKey: 'demenageurId', as: 'demenageur' });
 
-module.exports = mongoose.model('Chat', chatSchema);
+module.exports = Chat;

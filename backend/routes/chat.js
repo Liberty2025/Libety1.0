@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { Chat, ChatMessage, ServiceRequest, User } = require('../models');
+const { queryOne, queryMany, query } = require('../utils/dbHelpers');
 const jwt = require('jsonwebtoken');
 
 // Middleware d'authentification
@@ -33,9 +33,16 @@ router.post('/create-from-service-request', async (req, res) => {
     const { serviceRequestId } = req.body;
 
     // Vérifier que la demande de service existe et est acceptée
-    const serviceRequest = await ServiceRequest.findById(serviceRequestId)
-      .populate('clientId', 'first_name last_name')
-      .populate('demenageurId', 'first_name last_name');
+    const serviceRequest = await queryOne(
+      `SELECT sr.*, 
+              c.id as client_id, c.first_name as client_first_name, c.last_name as client_last_name,
+              d.id as demenageur_id, d.first_name as demenageur_first_name, d.last_name as demenageur_last_name
+       FROM service_requests sr
+       JOIN users c ON sr.client_id = c.id
+       JOIN users d ON sr.demenageur_id = d.id
+       WHERE sr.id = $1`,
+      [serviceRequestId]
+    );
 
     if (!serviceRequest) {
       return res.status(404).json({
@@ -52,7 +59,10 @@ router.post('/create-from-service-request', async (req, res) => {
     }
 
     // Vérifier qu'un chat n'existe pas déjà
-    const existingChat = await Chat.findOne({ serviceRequestId });
+    const existingChat = await queryOne(
+      'SELECT * FROM chats WHERE service_request_id = $1',
+      [serviceRequestId]
+    );
     if (existingChat) {
       return res.status(200).json({
         success: true,
@@ -62,53 +72,66 @@ router.post('/create-from-service-request', async (req, res) => {
     }
 
     // Créer le chat
-    const chat = new Chat({
-      serviceRequestId,
-      clientId: serviceRequest.clientId._id,
-      demenageurId: serviceRequest.demenageurId._id,
-      status: 'active'
-    });
-
-    await chat.save();
+    const chatResult = await query(
+      `INSERT INTO chats (id, service_request_id, client_id, demenageur_id, status, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), NOW())
+       RETURNING *`,
+      [serviceRequestId, serviceRequest.client_id, serviceRequest.demenageur_id, 'active']
+    );
+    const chat = chatResult.rows[0];
 
     // Créer un message système de bienvenue
-    const welcomeMessage = new ChatMessage({
-      chatId: chat._id,
-      serviceRequestId,
-      senderId: serviceRequest.demenageurId._id,
-      senderType: 'demenageur',
-      content: `Bonjour ${serviceRequest.clientId.first_name} ! Votre demande de ${serviceRequest.serviceType} a été acceptée. Nous pouvons maintenant discuter des détails.`,
-      messageType: 'system'
-    });
-
-    await welcomeMessage.save();
+    const welcomeMessageResult = await query(
+      `INSERT INTO chat_messages (id, chat_id, service_request_id, sender_id, sender_type, content, message_type, status, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+       RETURNING *`,
+      [
+        chat.id,
+        serviceRequestId,
+        serviceRequest.demenageur_id,
+        'demenageur',
+        `Bonjour ${serviceRequest.client_first_name} ! Votre demande de ${serviceRequest.service_type} a été acceptée. Nous pouvons maintenant discuter des détails.`,
+        'system',
+        'sent'
+      ]
+    );
 
     // Émettre un événement WebSocket
     const io = req.app.get('io');
     if (io) {
       // Notifier le client qu'un chat a été créé
-      io.to(`user_${serviceRequest.clientId._id}`).emit('chat_created', {
-        chatId: chat._id,
+      io.to(`user_${serviceRequest.client_id}`).emit('chat_created', {
+        chatId: chat.id,
         serviceRequestId,
-        demenageurName: `${serviceRequest.demenageurId.first_name} ${serviceRequest.demenageurId.last_name}`,
-        message: welcomeMessage.content
+        demenageurName: `${serviceRequest.demenageur_first_name} ${serviceRequest.demenageur_last_name}`,
+        message: welcomeMessageResult.rows[0].content
       });
 
       // Notifier le déménageur
-      io.to(`user_${serviceRequest.demenageurId._id}`).emit('chat_created', {
-        chatId: chat._id,
+      io.to(`user_${serviceRequest.demenageur_id}`).emit('chat_created', {
+        chatId: chat.id,
         serviceRequestId,
-        clientName: `${serviceRequest.clientId.first_name} ${serviceRequest.clientId.last_name}`,
-        message: welcomeMessage.content
+        clientName: `${serviceRequest.client_first_name} ${serviceRequest.client_last_name}`,
+        message: welcomeMessageResult.rows[0].content
       });
     }
+
+    // Récupérer le chat avec les informations des utilisateurs
+    const chatWithUsers = await queryOne(
+      `SELECT c.*, 
+              cl.first_name as client_first_name, cl.last_name as client_last_name,
+              d.first_name as demenageur_first_name, d.last_name as demenageur_last_name
+       FROM chats c
+       JOIN users cl ON c.client_id = cl.id
+       JOIN users d ON c.demenageur_id = d.id
+       WHERE c.id = $1`,
+      [chat.id]
+    );
 
     res.status(201).json({
       success: true,
       message: 'Chat créé avec succès',
-      chat: await Chat.findById(chat._id)
-        .populate('clientId', 'first_name last_name')
-        .populate('demenageurId', 'first_name last_name')
+      chat: chatWithUsers
     });
 
   } catch (error) {
@@ -126,38 +149,101 @@ router.get('/my-chats', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const userRole = req.user.role;
 
-    let query = {};
-    if (userRole === 'client') {
-      query.clientId = userId;
-    } else if (userRole === 'demenageur') {
-      query.demenageurId = userId;
-    } else {
+    if (userRole !== 'client' && userRole !== 'demenageur') {
       return res.status(403).json({
         success: false,
         message: 'Rôle non autorisé'
       });
     }
 
-    const chats = await Chat.find(query)
-      .populate('clientId', 'first_name last_name')
-      .populate('demenageurId', 'first_name last_name')
-      .populate('serviceRequestId', 'serviceType departureAddress destinationAddress status')
-      .sort({ lastMessageAt: -1 });
+    let chats;
+    if (userRole === 'client') {
+      chats = await queryMany(
+        `SELECT c.*, 
+                cl.first_name as client_first_name, cl.last_name as client_last_name,
+                cl.email as client_email, cl.phone as client_phone,
+                d.first_name as demenageur_first_name, d.last_name as demenageur_last_name,
+                sr.service_type, sr.departure_address, sr.destination_address, sr.status as service_status
+         FROM chats c
+         JOIN users cl ON c.client_id = cl.id
+         JOIN users d ON c.demenageur_id = d.id
+         JOIN service_requests sr ON c.service_request_id = sr.id
+         WHERE c.client_id = $1
+         ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC`,
+        [userId]
+      );
+    } else {
+      chats = await queryMany(
+        `SELECT c.*, 
+                cl.first_name as client_first_name, cl.last_name as client_last_name,
+                cl.email as client_email, cl.phone as client_phone,
+                d.first_name as demenageur_first_name, d.last_name as demenageur_last_name,
+                sr.service_type, sr.departure_address, sr.destination_address, sr.status as service_status
+         FROM chats c
+         JOIN users cl ON c.client_id = cl.id
+         JOIN users d ON c.demenageur_id = d.id
+         JOIN service_requests sr ON c.service_request_id = sr.id
+         WHERE c.demenageur_id = $1
+         ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC`,
+        [userId]
+      );
+    }
 
-    // Enrichir avec le dernier message
+    // Enrichir avec le dernier message et transformer en camelCase
     const chatsWithLastMessage = await Promise.all(
       chats.map(async (chat) => {
-        const lastMessage = await ChatMessage.findOne({ chatId: chat._id })
-          .sort({ createdAt: -1 })
-          .populate('senderId', 'first_name last_name');
+        const lastMessage = await queryOne(
+          `SELECT cm.*, u.first_name, u.last_name
+           FROM chat_messages cm
+           JOIN users u ON cm.sender_id = u.id
+           WHERE cm.chat_id = $1
+           ORDER BY cm.created_at DESC
+           LIMIT 1`,
+          [chat.id]
+        );
 
+        // Transformer en camelCase pour le frontend
         return {
-          ...chat.toObject(),
+          id: chat.id,
+          _id: chat.id, // Pour compatibilité MongoDB
+          serviceRequestId: {
+            id: chat.service_request_id,
+            serviceType: chat.service_type,
+            departureAddress: chat.departure_address,
+            destinationAddress: chat.destination_address,
+            status: chat.service_status
+          },
+          clientId: {
+            id: chat.client_id,
+            firstName: chat.client_first_name,
+            lastName: chat.client_last_name,
+            first_name: chat.client_first_name, // Pour compatibilité
+            last_name: chat.client_last_name, // Pour compatibilité
+            email: chat.client_email || null,
+            phone: chat.client_phone || null
+          },
+          demenageurId: {
+            id: chat.demenageur_id,
+            firstName: chat.demenageur_first_name,
+            lastName: chat.demenageur_last_name,
+            first_name: chat.demenageur_first_name, // Pour compatibilité
+            last_name: chat.demenageur_last_name // Pour compatibilité
+          },
+          status: chat.status,
+          unreadByDemenageur: chat.unread_by_demenageur || 0,
+          unreadByClient: chat.unread_by_client || 0,
+          createdAt: chat.created_at,
+          updatedAt: chat.updated_at,
+          lastMessageAt: chat.last_message_at,
           lastMessage: lastMessage ? {
+            id: lastMessage.id,
+            _id: lastMessage.id, // Pour compatibilité
             content: lastMessage.content,
-            senderName: `${lastMessage.senderId.first_name} ${lastMessage.senderId.last_name}`,
-            senderType: lastMessage.senderType,
-            createdAt: lastMessage.createdAt
+            senderName: `${lastMessage.first_name} ${lastMessage.last_name}`,
+            senderType: lastMessage.sender_type,
+            messageType: lastMessage.message_type,
+            createdAt: lastMessage.created_at,
+            updatedAt: lastMessage.updated_at
           } : null
         };
       })
@@ -184,7 +270,10 @@ router.get('/:chatId/messages', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
 
     // Vérifier que l'utilisateur a accès à ce chat
-    const chat = await Chat.findById(chatId);
+    const chat = await queryOne(
+      'SELECT * FROM chats WHERE id = $1',
+      [chatId]
+    );
     if (!chat) {
       return res.status(404).json({
         success: false,
@@ -192,7 +281,7 @@ router.get('/:chatId/messages', authenticateToken, async (req, res) => {
       });
     }
 
-    if (chat.clientId.toString() !== userId && chat.demenageurId.toString() !== userId) {
+    if (chat.client_id !== userId && chat.demenageur_id !== userId) {
       return res.status(403).json({
         success: false,
         message: 'Accès non autorisé à ce chat'
@@ -200,28 +289,34 @@ router.get('/:chatId/messages', authenticateToken, async (req, res) => {
     }
 
     // Récupérer les messages
-    const messages = await ChatMessage.find({ chatId })
-      .populate('senderId', 'first_name last_name')
-      .sort({ createdAt: 1 });
+    const messages = await queryMany(
+      `SELECT cm.*, u.first_name, u.last_name
+       FROM chat_messages cm
+       JOIN users u ON cm.sender_id = u.id
+       WHERE cm.chat_id = $1
+       ORDER BY cm.created_at ASC`,
+      [chatId]
+    );
 
     // Marquer les messages comme lus
     const userRole = req.user.role;
     if (userRole === 'client') {
-      chat.unreadByClient = 0;
+      await query('UPDATE chats SET unread_by_client = 0 WHERE id = $1', [chatId]);
     } else if (userRole === 'demenageur') {
-      chat.unreadByDemenageur = 0;
+      await query('UPDATE chats SET unread_by_demenageur = 0 WHERE id = $1', [chatId]);
     }
-    await chat.save();
 
     res.status(200).json({
       success: true,
       messages: messages.map(msg => ({
-        _id: msg._id,
+        id: msg.id,
+        _id: msg.id, // Pour compatibilité MongoDB
         content: msg.content,
-        senderType: msg.senderType,
-        senderName: `${msg.senderId.first_name} ${msg.senderId.last_name}`,
-        messageType: msg.messageType,
-        createdAt: msg.createdAt,
+        senderType: msg.sender_type,
+        senderName: `${msg.first_name} ${msg.last_name}`,
+        messageType: msg.message_type,
+        createdAt: msg.created_at,
+        updatedAt: msg.updated_at,
         status: msg.status
       }))
     });
@@ -244,7 +339,10 @@ router.post('/:chatId/messages', authenticateToken, async (req, res) => {
     const userRole = req.user.role;
 
     // Vérifier que l'utilisateur a accès à ce chat
-    const chat = await Chat.findById(chatId);
+    const chat = await queryOne(
+      'SELECT * FROM chats WHERE id = $1',
+      [chatId]
+    );
     if (!chat) {
       return res.status(404).json({
         success: false,
@@ -252,7 +350,7 @@ router.post('/:chatId/messages', authenticateToken, async (req, res) => {
       });
     }
 
-    if (chat.clientId.toString() !== userId && chat.demenageurId.toString() !== userId) {
+    if (chat.client_id !== userId && chat.demenageur_id !== userId) {
       return res.status(403).json({
         success: false,
         message: 'Accès non autorisé à ce chat'
@@ -260,48 +358,51 @@ router.post('/:chatId/messages', authenticateToken, async (req, res) => {
     }
 
     // Créer le message
-    const message = new ChatMessage({
-      chatId,
-      serviceRequestId: chat.serviceRequestId,
-      senderId: userId,
-      senderType: userRole,
-      content,
-      messageType,
-      status: 'sent'
-    });
-
-    await message.save();
+    const messageResult = await query(
+      `INSERT INTO chat_messages (id, chat_id, service_request_id, sender_id, sender_type, content, message_type, status, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+       RETURNING *`,
+      [chatId, chat.service_request_id, userId, userRole, content, messageType, 'sent']
+    );
+    const message = messageResult.rows[0];
 
     // Mettre à jour le chat
-    chat.lastMessageAt = new Date();
-    
-    // Incrémenter les messages non lus pour l'autre utilisateur
     if (userRole === 'client') {
-      chat.unreadByDemenageur += 1;
+      await query(
+        `UPDATE chats 
+         SET last_message_at = NOW(), unread_by_demenageur = unread_by_demenageur + 1
+         WHERE id = $1`,
+        [chatId]
+      );
     } else {
-      chat.unreadByClient += 1;
+      await query(
+        `UPDATE chats 
+         SET last_message_at = NOW(), unread_by_client = unread_by_client + 1
+         WHERE id = $1`,
+        [chatId]
+      );
     }
 
-    await chat.save();
-
-    // Récupérer le message avec les informations de l'expéditeur
-    const messageWithSender = await ChatMessage.findById(message._id)
-      .populate('senderId', 'first_name last_name');
+    // Récupérer les informations de l'expéditeur
+    const sender = await queryOne(
+      'SELECT first_name, last_name FROM users WHERE id = $1',
+      [userId]
+    );
 
     // Émettre l'événement WebSocket
     const io = req.app.get('io');
     if (io) {
-      const targetUserId = userRole === 'client' ? chat.demenageurId : chat.clientId;
+      const targetUserId = userRole === 'client' ? chat.demenageur_id : chat.client_id;
       
       io.to(`user_${targetUserId}`).emit('new_message', {
         chatId,
         message: {
-          _id: message._id,
+          id: message.id,
           content: message.content,
-          senderType: message.senderType,
-          senderName: `${messageWithSender.senderId.first_name} ${messageWithSender.senderId.last_name}`,
-          messageType: message.messageType,
-          createdAt: message.createdAt,
+          senderType: message.sender_type,
+          senderName: sender ? `${sender.first_name} ${sender.last_name}` : 'Unknown',
+          messageType: message.message_type,
+          createdAt: message.created_at,
           status: message.status
         }
       });
@@ -310,12 +411,12 @@ router.post('/:chatId/messages', authenticateToken, async (req, res) => {
       io.to(`user_${userId}`).emit('message_sent', {
         chatId,
         message: {
-          _id: message._id,
+          id: message.id,
           content: message.content,
-          senderType: message.senderType,
-          senderName: `${messageWithSender.senderId.first_name} ${messageWithSender.senderId.last_name}`,
-          messageType: message.messageType,
-          createdAt: message.createdAt,
+          senderType: message.sender_type,
+          senderName: sender ? `${sender.first_name} ${sender.last_name}` : 'Unknown',
+          messageType: message.message_type,
+          createdAt: message.created_at,
           status: 'delivered'
         }
       });
@@ -325,12 +426,12 @@ router.post('/:chatId/messages', authenticateToken, async (req, res) => {
       success: true,
       message: 'Message envoyé avec succès',
       data: {
-        _id: message._id,
+        id: message.id,
         content: message.content,
-        senderType: message.senderType,
-        senderName: `${messageWithSender.senderId.first_name} ${messageWithSender.senderId.last_name}`,
-        messageType: message.messageType,
-        createdAt: message.createdAt,
+        senderType: message.sender_type,
+        senderName: sender ? `${sender.first_name} ${sender.last_name}` : 'Unknown',
+        messageType: message.message_type,
+        createdAt: message.created_at,
         status: message.status
       }
     });
@@ -351,7 +452,10 @@ router.put('/:chatId/mark-read', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
     const userRole = req.user.role;
 
-    const chat = await Chat.findById(chatId);
+    const chat = await queryOne(
+      'SELECT * FROM chats WHERE id = $1',
+      [chatId]
+    );
     if (!chat) {
       return res.status(404).json({
         success: false,
@@ -359,7 +463,7 @@ router.put('/:chatId/mark-read', authenticateToken, async (req, res) => {
       });
     }
 
-    if (chat.clientId.toString() !== userId && chat.demenageurId.toString() !== userId) {
+    if (chat.client_id !== userId && chat.demenageur_id !== userId) {
       return res.status(403).json({
         success: false,
         message: 'Accès non autorisé à ce chat'
@@ -368,20 +472,22 @@ router.put('/:chatId/mark-read', authenticateToken, async (req, res) => {
 
     // Marquer les messages comme lus
     if (userRole === 'client') {
-      chat.unreadByClient = 0;
-      await ChatMessage.updateMany(
-        { chatId, senderType: 'demenageur', status: 'sent' },
-        { status: 'read', readAt: new Date() }
+      await query('UPDATE chats SET unread_by_client = 0 WHERE id = $1', [chatId]);
+      await query(
+        `UPDATE chat_messages 
+         SET status = 'read', read_at = NOW() 
+         WHERE chat_id = $1 AND sender_type = 'demenageur' AND status = 'sent'`,
+        [chatId]
       );
     } else if (userRole === 'demenageur') {
-      chat.unreadByDemenageur = 0;
-      await ChatMessage.updateMany(
-        { chatId, senderType: 'client', status: 'sent' },
-        { status: 'read', readAt: new Date() }
+      await query('UPDATE chats SET unread_by_demenageur = 0 WHERE id = $1', [chatId]);
+      await query(
+        `UPDATE chat_messages 
+         SET status = 'read', read_at = NOW() 
+         WHERE chat_id = $1 AND sender_type = 'client' AND status = 'sent'`,
+        [chatId]
       );
     }
-
-    await chat.save();
 
     res.status(200).json({
       success: true,

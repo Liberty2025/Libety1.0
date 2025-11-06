@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const ServiceRequest = require('../models/ServiceRequest');
-const User = require('../models/User');
+const { queryOne, queryMany } = require('../utils/dbHelpers');
 
 // Middleware d'authentification
 const authenticateToken = (req, res, next) => {
@@ -28,7 +27,10 @@ router.get('/demenageur', authenticateToken, async (req, res) => {
     const demenageurId = req.user.userId;
 
     // Vérifier que l'utilisateur est un déménageur
-    const demenageur = await User.findById(demenageurId);
+    const demenageur = await queryOne(
+      'SELECT * FROM users WHERE id = $1',
+      [demenageurId]
+    );
     if (!demenageur || demenageur.role !== 'demenageur') {
       return res.status(403).json({
         success: false,
@@ -37,9 +39,15 @@ router.get('/demenageur', authenticateToken, async (req, res) => {
     }
 
     // Récupérer toutes les missions du déménageur
-    const missions = await ServiceRequest.find({ demenageurId })
-      .populate('clientId', 'first_name last_name')
-      .sort({ createdAt: -1 });
+    const missions = await queryMany(
+      `SELECT sr.*, 
+              c.id as client_id, c.first_name as client_first_name, c.last_name as client_last_name
+       FROM service_requests sr
+       LEFT JOIN users c ON sr.client_id = c.id
+       WHERE sr.demenageur_id = $1
+       ORDER BY sr.created_at DESC`,
+      [demenageurId]
+    );
 
     // Calculer les statistiques
     const totalMissions = missions.length;
@@ -51,8 +59,8 @@ router.get('/demenageur', authenticateToken, async (req, res) => {
 
     // Calculer les gains totaux
     const totalEarnings = missions
-      .filter(m => m.actualPrice && m.status === 'completed')
-      .reduce((sum, m) => sum + m.actualPrice, 0);
+      .filter(m => m.actual_price && m.status === 'completed')
+      .reduce((sum, m) => sum + parseFloat(m.actual_price || 0), 0);
 
     // Calculer le taux de completion
     const completionRate = totalMissions > 0 ? Math.round((completedMissions / totalMissions) * 100) : 0;
@@ -61,9 +69,9 @@ router.get('/demenageur', authenticateToken, async (req, res) => {
     let averageResponseTime = 'N/A';
     if (missions.length > 0) {
       const responseTimes = missions
-        .filter(m => m.createdAt && m.updatedAt)
+        .filter(m => m.created_at && m.updated_at)
         .map(m => {
-          const responseTime = new Date(m.updatedAt) - new Date(m.createdAt);
+          const responseTime = new Date(m.updated_at) - new Date(m.created_at);
           return responseTime / (1000 * 60 * 60); // Convertir en heures
         });
       
@@ -84,13 +92,13 @@ router.get('/demenageur', authenticateToken, async (req, res) => {
       const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0);
       
       const monthMissions = missions.filter(m => {
-        const missionDate = new Date(m.createdAt);
+        const missionDate = new Date(m.created_at);
         return missionDate >= monthStart && missionDate <= monthEnd;
       });
       
       const monthEarnings = monthMissions
-        .filter(m => m.actualPrice && m.status === 'completed')
-        .reduce((sum, m) => sum + m.actualPrice, 0);
+        .filter(m => m.actual_price && m.status === 'completed')
+        .reduce((sum, m) => sum + parseFloat(m.actual_price || 0), 0);
       
       monthlyStats.push({
         month: date.toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' }),
@@ -101,14 +109,16 @@ router.get('/demenageur', authenticateToken, async (req, res) => {
 
     // Missions récentes (dernières 5)
     const recentMissions = missions.slice(0, 5).map(mission => ({
-      id: mission._id,
-      clientName: mission.clientId ? `${mission.clientId.first_name} ${mission.clientId.last_name}` : 'Client inconnu',
-      serviceType: mission.serviceType,
+      id: mission.id,
+      clientName: mission.client_first_name && mission.client_last_name 
+        ? `${mission.client_first_name} ${mission.client_last_name}` 
+        : 'Client inconnu',
+      serviceType: mission.service_type,
       status: mission.status,
-      actualPrice: mission.actualPrice,
-      createdAt: mission.createdAt,
-      departureAddress: mission.departureAddress,
-      destinationAddress: mission.destinationAddress
+      actualPrice: mission.actual_price ? parseFloat(mission.actual_price) : null,
+      createdAt: mission.created_at,
+      departureAddress: mission.departure_address,
+      destinationAddress: mission.destination_address
     }));
 
     const statistics = {

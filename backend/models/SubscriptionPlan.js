@@ -1,45 +1,52 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
 
-const subscriptionPlanSchema = new mongoose.Schema({
+const SubscriptionPlan = sequelize.define('SubscriptionPlan', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   plan_id: {
-    type: String,
-    required: true,
-    unique: true,
-    maxlength: 50
+    type: DataTypes.STRING(50),
+    allowNull: false,
+    unique: true
   },
   name: {
-    type: String,
-    required: true,
-    maxlength: 255
+    type: DataTypes.STRING(255),
+    allowNull: false
   },
   description: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   },
   price: {
-    type: Number,
-    required: true,
-    min: 0
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    validate: {
+      min: 0
+    }
   },
   currency: {
-    type: String,
-    default: 'EUR',
-    maxlength: 3
+    type: DataTypes.STRING(3),
+    defaultValue: 'EUR'
   },
   billing_cycle: {
-    type: String,
-    required: true,
-    enum: ['monthly', 'yearly'],
-    maxlength: 20
+    type: DataTypes.ENUM('monthly', 'yearly'),
+    allowNull: false
   },
   features: {
-    type: mongoose.Schema.Types.Mixed
+    type: DataTypes.JSONB,
+    defaultValue: {}
   },
   is_active: {
-    type: Boolean,
-    default: true
+    type: DataTypes.BOOLEAN,
+    defaultValue: true
   }
 }, {
-  timestamps: true
+  tableName: 'subscription_plans',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('SubscriptionPlan', subscriptionPlanSchema);
+module.exports = SubscriptionPlan;

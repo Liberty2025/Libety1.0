@@ -1,34 +1,64 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const User = require('./User');
+const Reservation = require('./Reservation');
 
-const demenageurEvaluationSchema = new mongoose.Schema({
+const DemenageurEvaluation = sequelize.define('DemenageurEvaluation', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   demenageur_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
   client_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
   reservation_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Reservation'
+    type: DataTypes.UUID,
+    allowNull: true,
+    references: {
+      model: Reservation,
+      key: 'id'
+    }
   },
   rating: {
-    type: Number,
-    required: true,
-    min: 1,
-    max: 5
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    validate: {
+      min: 1,
+      max: 5
+    }
   },
   comment: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   }
 }, {
-  timestamps: true
+  tableName: 'demenageur_evaluations',
+  timestamps: true,
+  underscored: true,
+  indexes: [
+    {
+      unique: true,
+      fields: ['demenageur_id', 'client_id', 'reservation_id']
+    }
+  ]
 });
 
-// Index unique pour éviter les doublons
-demenageurEvaluationSchema.index({ demenageur_id: 1, client_id: 1, reservation_id: 1 }, { unique: true });
+DemenageurEvaluation.belongsTo(User, { foreignKey: 'demenageur_id', as: 'demenageur' });
+DemenageurEvaluation.belongsTo(User, { foreignKey: 'client_id', as: 'client' });
+DemenageurEvaluation.belongsTo(Reservation, { foreignKey: 'reservation_id' });
 
-module.exports = mongoose.model('DemenageurEvaluation', demenageurEvaluationSchema);
+module.exports = DemenageurEvaluation;

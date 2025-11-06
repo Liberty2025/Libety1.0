@@ -1,35 +1,56 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const User = require('./User');
+const Reservation = require('./Reservation');
 
-const demenageurPaymentSchema = new mongoose.Schema({
+const DemenageurPayment = sequelize.define('DemenageurPayment', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   demenageur_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
   reservation_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Reservation'
+    type: DataTypes.UUID,
+    allowNull: true,
+    references: {
+      model: Reservation,
+      key: 'id'
+    }
   },
   amount: {
-    type: Number,
-    required: true,
-    min: 0
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    validate: {
+      min: 0
+    }
   },
   payment_method: {
-    type: String,
-    maxlength: 50
+    type: DataTypes.STRING(50),
+    allowNull: true
   },
   status: {
-    type: String,
-    enum: ['pending', 'completed', 'failed', 'refunded'],
-    default: 'pending',
-    maxlength: 20
+    type: DataTypes.ENUM('pending', 'completed', 'failed', 'refunded'),
+    defaultValue: 'pending'
   },
   payment_date: {
-    type: Date
+    type: DataTypes.DATE,
+    allowNull: true
   }
 }, {
-  timestamps: true
+  tableName: 'demenageur_payments',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('DemenageurPayment', demenageurPaymentSchema);
+DemenageurPayment.belongsTo(User, { foreignKey: 'demenageur_id' });
+DemenageurPayment.belongsTo(Reservation, { foreignKey: 'reservation_id' });
+
+module.exports = DemenageurPayment;

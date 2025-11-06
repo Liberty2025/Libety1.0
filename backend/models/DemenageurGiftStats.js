@@ -1,27 +1,46 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const User = require('./User');
 
-const demenageurGiftStatsSchema = new mongoose.Schema({
+const DemenageurGiftStats = sequelize.define('DemenageurGiftStats', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   demenageur_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
-    unique: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    unique: true,
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
   current_score: {
-    type: Number,
-    default: 0,
-    min: 0
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+    validate: {
+      min: 0
+    }
   },
   total_gifts_received: {
-    type: Number,
-    default: 0,
-    min: 0
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+    validate: {
+      min: 0
+    }
   },
   last_gift_received_at: {
-    type: Date
+    type: DataTypes.DATE,
+    allowNull: true
   }
 }, {
-  timestamps: true
+  tableName: 'demenageur_gift_stats',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('DemenageurGiftStats', demenageurGiftStatsSchema);
+DemenageurGiftStats.belongsTo(User, { foreignKey: 'demenageur_id' });
+
+module.exports = DemenageurGiftStats;

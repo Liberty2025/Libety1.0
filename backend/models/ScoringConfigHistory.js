@@ -1,27 +1,43 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const User = require('./User');
 
-const scoringConfigHistorySchema = new mongoose.Schema({
+const ScoringConfigHistory = sequelize.define('ScoringConfigHistory', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   config_key: {
-    type: String,
-    required: true,
-    maxlength: 100
+    type: DataTypes.STRING(100),
+    allowNull: false
   },
   old_value: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   },
   new_value: {
-    type: String,
-    required: true
+    type: DataTypes.TEXT,
+    allowNull: false
   },
   changed_by: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    type: DataTypes.UUID,
+    allowNull: true,
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
   change_reason: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   }
 }, {
-  timestamps: true
+  tableName: 'scoring_config_history',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('ScoringConfigHistory', scoringConfigHistorySchema);
+ScoringConfigHistory.belongsTo(User, { foreignKey: 'changed_by' });
+
+module.exports = ScoringConfigHistory;

@@ -1,72 +1,88 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const Chat = require('./Chat');
+const ServiceRequest = require('./ServiceRequest');
+const User = require('./User');
 
-const chatMessageSchema = new mongoose.Schema({
-  // Référence vers le chat
+const ChatMessage = sequelize.define('ChatMessage', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   chatId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Chat',
-    required: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    field: 'chat_id',
+    references: {
+      model: Chat,
+      key: 'id'
+    }
   },
-  
-  // Référence vers la demande de service
   serviceRequestId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'ServiceRequest',
-    required: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    field: 'service_request_id',
+    references: {
+      model: ServiceRequest,
+      key: 'id'
+    }
   },
-  
-  // Expéditeur du message
   senderId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    field: 'sender_id',
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
-  
-  // Type d'expéditeur
   senderType: {
-    type: String,
-    enum: ['client', 'demenageur'],
-    required: true
+    type: DataTypes.ENUM('client', 'demenageur'),
+    allowNull: false,
+    field: 'sender_type'
   },
-  
-  // Contenu du message
   content: {
-    type: String,
-    required: true,
-    maxlength: 1000
+    type: DataTypes.STRING(1000),
+    allowNull: false
   },
-  
-  // Type de message
   messageType: {
-    type: String,
-    enum: ['text', 'image', 'file', 'system'],
-    default: 'text'
+    type: DataTypes.ENUM('text', 'image', 'file', 'system'),
+    defaultValue: 'text',
+    field: 'message_type'
   },
-  
-  // Statut du message
   status: {
-    type: String,
-    enum: ['sent', 'delivered', 'read'],
-    default: 'sent'
+    type: DataTypes.ENUM('sent', 'delivered', 'read'),
+    defaultValue: 'sent'
   },
-  
-  // Message lu par le destinataire
   readAt: {
-    type: Date
+    type: DataTypes.DATE,
+    allowNull: true,
+    field: 'read_at'
   },
-  
-  // Référence vers un message cité (pour les réponses)
   replyTo: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'ChatMessage'
+    type: DataTypes.UUID,
+    allowNull: true,
+    field: 'reply_to',
+    references: {
+      model: 'chat_messages',
+      key: 'id'
+    }
   }
 }, {
-  timestamps: true
+  tableName: 'chat_messages',
+  timestamps: true,
+  underscored: true,
+  indexes: [
+    { fields: ['chat_id', 'created_at'] },
+    { fields: ['service_request_id'] },
+    { fields: ['sender_id'] }
+  ]
 });
 
-// Index pour optimiser les requêtes
-chatMessageSchema.index({ chatId: 1, createdAt: -1 });
-chatMessageSchema.index({ serviceRequestId: 1 });
-chatMessageSchema.index({ senderId: 1 });
+ChatMessage.belongsTo(Chat, { foreignKey: 'chatId' });
+ChatMessage.belongsTo(ServiceRequest, { foreignKey: 'serviceRequestId' });
+ChatMessage.belongsTo(User, { foreignKey: 'senderId', as: 'sender' });
+ChatMessage.belongsTo(ChatMessage, { foreignKey: 'replyTo', as: 'replyToMessage' });
 
-module.exports = mongoose.model('ChatMessage', chatMessageSchema);
+module.exports = ChatMessage;

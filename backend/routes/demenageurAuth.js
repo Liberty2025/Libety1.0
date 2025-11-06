@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const User = require('../models/User');
+const { queryOne, query } = require('../utils/dbHelpers');
 const router = express.Router();
 
 // Configuration de multer pour l'upload de fichiers
@@ -98,7 +98,10 @@ router.post('/register', upload.fields([
     }
 
     // Vérifier si l'utilisateur existe déjà
-    const existingUser = await User.findOne({ email });
+    const existingUser = await queryOne(
+      'SELECT id FROM users WHERE email = $1',
+      [email.toLowerCase()]
+    );
     if (existingUser) {
       return res.status(409).json({
         success: false,
@@ -107,7 +110,10 @@ router.post('/register', upload.fields([
     }
 
     // Vérifier si le numéro de carte d'identité existe déjà
-    const existingIdentityCard = await User.findOne({ identityCardNumber });
+    const existingIdentityCard = await queryOne(
+      'SELECT id FROM users WHERE identity_card_number = $1',
+      [identityCardNumber]
+    );
     if (existingIdentityCard) {
       return res.status(409).json({
         success: false,
@@ -147,26 +153,18 @@ router.post('/register', upload.fields([
     };
 
     // Créer le nouvel utilisateur déménageur
-    const newUser = new User({
-      first_name: firstName,
-      last_name: lastName,
-      email: email.toLowerCase(),
-      phone: phone,
-      identityCardNumber: identityCardNumber,
-      password: hashedPassword,
-      role: 'demenageur',
-      status: 'pending_verification', // Statut en attente de vérification
-      documents: documents,
-      is_verified: false
-    });
-
-    // Sauvegarder l'utilisateur
-    await newUser.save();
+    const newUserResult = await query(
+      `INSERT INTO users (id, first_name, last_name, email, phone, identity_card_number, password, role, status, documents, is_verified, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+       RETURNING id, first_name, last_name, email, phone, identity_card_number, role, status, is_verified, created_at`,
+      [firstName, lastName, email.toLowerCase(), phone, identityCardNumber, hashedPassword, 'demenageur', 'pending_verification', JSON.stringify(documents), false]
+    );
+    const newUser = newUserResult.rows[0];
 
     // Générer un token JWT
     const token = jwt.sign(
       { 
-        userId: newUser._id, 
+        userId: newUser.id, 
         email: newUser.email, 
         role: newUser.role 
       },
@@ -176,16 +174,16 @@ router.post('/register', upload.fields([
 
     // Retourner la réponse (sans le mot de passe)
     const userResponse = {
-      id: newUser._id,
+      id: newUser.id,
       firstName: newUser.first_name,
       lastName: newUser.last_name,
       email: newUser.email,
       phone: newUser.phone,
-      identityCardNumber: newUser.identityCardNumber,
+      identityCardNumber: newUser.identity_card_number,
       role: newUser.role,
       status: newUser.status,
       isVerified: newUser.is_verified,
-      createdAt: newUser.createdAt
+      createdAt: newUser.created_at
     };
 
     res.status(201).json({
@@ -234,7 +232,10 @@ router.post('/login', async (req, res) => {
     }
 
     // Trouver l'utilisateur par email
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const user = await queryOne(
+      'SELECT * FROM users WHERE email = $1',
+      [email.toLowerCase()]
+    );
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -285,7 +286,7 @@ router.post('/login', async (req, res) => {
     // Générer un token JWT
     const token = jwt.sign(
       { 
-        userId: user._id, 
+        userId: user.id, 
         email: user.email, 
         role: user.role 
       },
@@ -295,17 +296,17 @@ router.post('/login', async (req, res) => {
 
     // Retourner la réponse (sans le mot de passe)
     const userResponse = {
-      id: user._id,
-      userId: user._id, // Ajouter userId pour compatibilité
+      id: user.id,
+      userId: user.id, // Ajouter userId pour compatibilité
       firstName: user.first_name,
       lastName: user.last_name,
       email: user.email,
       phone: user.phone,
-      identityCardNumber: user.identityCardNumber,
+      identityCardNumber: user.identity_card_number,
       role: user.role,
       status: user.status,
       isVerified: user.is_verified,
-      createdAt: user.createdAt
+      createdAt: user.created_at
     };
 
     res.status(200).json({
@@ -328,7 +329,11 @@ router.post('/login', async (req, res) => {
 // Route pour obtenir le profil du déménageur connecté
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId).select('-password');
+    const user = await queryOne(
+      `SELECT id, first_name, last_name, email, phone, identity_card_number, role, status, is_verified, documents, address, created_at, updated_at
+       FROM users WHERE id = $1`,
+      [req.user.userId]
+    );
     
     if (!user) {
       return res.status(404).json({
@@ -344,22 +349,32 @@ router.get('/profile', authenticateToken, async (req, res) => {
       });
     }
 
+    // Récupérer la localisation si elle existe
+    const location = await queryOne(
+      'SELECT * FROM user_locations WHERE user_id = $1',
+      [user.id]
+    );
+
+    const documents = user.documents 
+      ? (typeof user.documents === 'string' ? JSON.parse(user.documents) : user.documents)
+      : {};
+
     const userResponse = {
-      id: user._id,
+      id: user.id,
       firstName: user.first_name,
       lastName: user.last_name,
       email: user.email,
       phone: user.phone,
-      identityCardNumber: user.identityCardNumber,
+      identityCardNumber: user.identity_card_number,
       role: user.role,
       status: user.status,
       isVerified: user.is_verified,
-      documents: user.documents,
+      documents: documents,
       address: user.address,
-      latitude: user.latitude,
-      longitude: user.longitude,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt
+      latitude: location ? parseFloat(location.lat) : null,
+      longitude: location ? parseFloat(location.lng) : null,
+      createdAt: user.created_at,
+      updatedAt: user.updated_at
     };
 
     res.status(200).json({
@@ -383,17 +398,44 @@ router.put('/profile', authenticateToken, async (req, res) => {
     const { firstName, lastName, phone, address } = req.body;
     const userId = req.user.userId;
 
-    const updateData = {};
-    if (firstName) updateData.first_name = firstName;
-    if (lastName) updateData.last_name = lastName;
-    if (phone) updateData.phone = phone;
-    if (address) updateData.address = address;
+    // Construire la requête de mise à jour dynamiquement
+    const updates = [];
+    const values = [];
+    let paramIndex = 1;
 
-    const user = await User.findByIdAndUpdate(
-      userId,
-      updateData,
-      { new: true, runValidators: true }
-    ).select('-password');
+    if (firstName) {
+      updates.push(`first_name = $${paramIndex++}`);
+      values.push(firstName);
+    }
+    if (lastName) {
+      updates.push(`last_name = $${paramIndex++}`);
+      values.push(lastName);
+    }
+    if (phone) {
+      updates.push(`phone = $${paramIndex++}`);
+      values.push(phone);
+    }
+    if (address) {
+      updates.push(`address = $${paramIndex++}`);
+      values.push(address);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Aucune donnée à mettre à jour'
+      });
+    }
+
+    updates.push(`updated_at = NOW()`);
+    values.push(userId);
+    const finalParamIndex = paramIndex;
+
+    const user = await queryOne(
+      `SELECT id, first_name, last_name, email, phone, identity_card_number, role, status, is_verified, documents, address, created_at, updated_at
+       FROM users WHERE id = $1`,
+      [userId]
+    );
 
     if (!user) {
       return res.status(404).json({
@@ -409,22 +451,44 @@ router.put('/profile', authenticateToken, async (req, res) => {
       });
     }
 
+    await query(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${finalParamIndex}`,
+      values
+    );
+
+    // Récupérer l'utilisateur mis à jour
+    const updatedUser = await queryOne(
+      `SELECT id, first_name, last_name, email, phone, identity_card_number, role, status, is_verified, documents, address, created_at, updated_at
+       FROM users WHERE id = $1`,
+      [userId]
+    );
+
+    // Récupérer la localisation si elle existe
+    const location = await queryOne(
+      'SELECT * FROM user_locations WHERE user_id = $1',
+      [userId]
+    );
+
+    const documents = updatedUser.documents 
+      ? (typeof updatedUser.documents === 'string' ? JSON.parse(updatedUser.documents) : updatedUser.documents)
+      : {};
+
     const userResponse = {
-      id: user._id,
-      firstName: user.first_name,
-      lastName: user.last_name,
-      email: user.email,
-      phone: user.phone,
-      identityCardNumber: user.identityCardNumber,
-      role: user.role,
-      status: user.status,
-      isVerified: user.is_verified,
-      documents: user.documents,
-      address: user.address,
-      latitude: user.latitude,
-      longitude: user.longitude,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt
+      id: updatedUser.id,
+      firstName: updatedUser.first_name,
+      lastName: updatedUser.last_name,
+      email: updatedUser.email,
+      phone: updatedUser.phone,
+      identityCardNumber: updatedUser.identity_card_number,
+      role: updatedUser.role,
+      status: updatedUser.status,
+      isVerified: updatedUser.is_verified,
+      documents: documents,
+      address: updatedUser.address,
+      latitude: location ? parseFloat(location.lat) : null,
+      longitude: location ? parseFloat(location.lng) : null,
+      createdAt: updatedUser.created_at,
+      updatedAt: updatedUser.updated_at
     };
 
     res.status(200).json({

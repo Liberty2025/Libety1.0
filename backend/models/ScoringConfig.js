@@ -1,21 +1,29 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
 
-const scoringConfigSchema = new mongoose.Schema({
+const ScoringConfig = sequelize.define('ScoringConfig', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   config_key: {
-    type: String,
-    required: true,
-    unique: true,
-    maxlength: 100
+    type: DataTypes.STRING(100),
+    allowNull: false,
+    unique: true
   },
   config_value: {
-    type: String,
-    required: true
+    type: DataTypes.TEXT,
+    allowNull: false
   },
   description: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   }
 }, {
-  timestamps: true
+  tableName: 'scoring_config',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('ScoringConfig', scoringConfigSchema);
+module.exports = ScoringConfig;

@@ -1,25 +1,40 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const User = require('./User');
 
-const demenageurPaymentPreferencesSchema = new mongoose.Schema({
+const DemenageurPaymentPreferences = sequelize.define('DemenageurPaymentPreferences', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   demenageur_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
-    unique: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    unique: true,
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
   preferred_method: {
-    type: String,
-    maxlength: 50
+    type: DataTypes.STRING(50),
+    allowNull: true
   },
   bank_account: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   },
   paypal_email: {
-    type: String,
-    maxlength: 255
+    type: DataTypes.STRING(255),
+    allowNull: true
   }
 }, {
-  timestamps: true
+  tableName: 'demenageur_payment_preferences',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('DemenageurPaymentPreferences', demenageurPaymentPreferencesSchema);
+DemenageurPaymentPreferences.belongsTo(User, { foreignKey: 'demenageur_id' });
+
+module.exports = DemenageurPaymentPreferences;

@@ -1,11 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const { User, MoverProfile, UserLocation } = require('../models');
+const { queryOne, queryMany } = require('../utils/dbHelpers');
 
 // GET /api/users - Liste tous les utilisateurs
 router.get('/', async (req, res) => {
   try {
-    const users = await User.find().select('-password');
+    const users = await queryMany(
+      'SELECT id, first_name, last_name, email, phone, role, status, address, created_at, updated_at FROM users'
+    );
     res.json({
       success: true,
       data: users,
@@ -23,7 +25,10 @@ router.get('/', async (req, res) => {
 // GET /api/users/demenageurs - Liste tous les déménageurs
 router.get('/demenageurs', async (req, res) => {
   try {
-    const demenageurs = await User.find({ role: 'demenageur' }).select('-password');
+    const demenageurs = await queryMany(
+      'SELECT id, first_name, last_name, email, phone, role, status, address, created_at, updated_at FROM users WHERE role = $1',
+      ['demenageur']
+    );
     res.json({
       success: true,
       data: demenageurs,
@@ -41,16 +46,30 @@ router.get('/demenageurs', async (req, res) => {
 // GET /api/users/:id - Détails d'un utilisateur
 router.get('/:id', async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select('-password');
+    const user = await queryOne(
+      'SELECT id, first_name, last_name, email, phone, role, status, address, created_at, updated_at FROM users WHERE id = $1',
+      [req.params.id]
+    );
     if (!user) {
       return res.status(404).json({
         success: false,
         message: 'Utilisateur non trouvé'
       });
     }
+    
+    // Récupérer la localisation si elle existe
+    const location = await queryOne(
+      'SELECT * FROM user_locations WHERE user_id = $1',
+      [user.id]
+    );
+    
     res.json({
       success: true,
-      data: user
+      data: {
+        ...user,
+        latitude: location ? parseFloat(location.lat) : null,
+        longitude: location ? parseFloat(location.lng) : null
+      }
     });
   } catch (error) {
     res.status(500).json({
@@ -64,7 +83,10 @@ router.get('/:id', async (req, res) => {
 // GET /api/users/:id/profile - Profil complet d'un déménageur
 router.get('/:id/profile', async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select('-password');
+    const user = await queryOne(
+      'SELECT id, first_name, last_name, email, phone, role, status, address, created_at, updated_at FROM users WHERE id = $1',
+      [req.params.id]
+    );
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -79,13 +101,23 @@ router.get('/:id/profile', async (req, res) => {
       });
     }
 
-    const profile = await MoverProfile.findOne({ user_id: user._id });
-    const location = await UserLocation.findOne({ user_id: user._id });
+    const profile = await queryOne(
+      'SELECT * FROM mover_profiles WHERE user_id = $1',
+      [user.id]
+    );
+    const location = await queryOne(
+      'SELECT * FROM user_locations WHERE user_id = $1',
+      [user.id]
+    );
 
     res.json({
       success: true,
       data: {
-        user,
+        user: {
+          ...user,
+          latitude: location ? parseFloat(location.lat) : null,
+          longitude: location ? parseFloat(location.lng) : null
+        },
         profile,
         location
       }
@@ -111,19 +143,25 @@ router.get('/demenageurs/nearby', async (req, res) => {
       });
     }
 
-    // Pour une vraie application, vous utiliseriez une requête géospatiale
-    // Ici, on récupère tous les déménageurs disponibles
-    const demenageurs = await User.find({ 
-      role: 'demenageur', 
-      status: 'available' 
-    }).select('-password');
+    // Récupérer tous les déménageurs disponibles
+    const demenageurs = await queryMany(
+      `SELECT id, first_name, last_name, email, phone, role, status, address, created_at, updated_at 
+       FROM users 
+       WHERE role = 'demenageur' AND status = 'available'`
+    );
 
     const demenageursWithProfiles = await Promise.all(
       demenageurs.map(async (demenageur) => {
-        const profile = await MoverProfile.findOne({ user_id: demenageur._id });
-        const location = await UserLocation.findOne({ user_id: demenageur._id });
+        const profile = await queryOne(
+          'SELECT * FROM mover_profiles WHERE user_id = $1',
+          [demenageur.id]
+        );
+        const location = await queryOne(
+          'SELECT * FROM user_locations WHERE user_id = $1',
+          [demenageur.id]
+        );
         return {
-          ...demenageur.toObject(),
+          ...demenageur,
           profile,
           location
         };

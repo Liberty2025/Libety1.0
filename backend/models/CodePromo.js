@@ -1,42 +1,52 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
 
-const codePromoSchema = new mongoose.Schema({
+const CodePromo = sequelize.define('CodePromo', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   code: {
-    type: String,
-    required: true,
-    unique: true,
-    maxlength: 50
+    type: DataTypes.STRING(50),
+    allowNull: false,
+    unique: true
   },
   discount_type: {
-    type: String,
-    required: true,
-    enum: ['percentage', 'fixed'],
-    maxlength: 20
+    type: DataTypes.ENUM('percentage', 'fixed'),
+    allowNull: false
   },
   discount_value: {
-    type: Number,
-    required: true,
-    min: 0
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    validate: {
+      min: 0
+    }
   },
   valid_until: {
-    type: Date
+    type: DataTypes.DATE,
+    allowNull: true
   },
   max_usage: {
-    type: Number
+    type: DataTypes.INTEGER,
+    allowNull: true
   },
   current_usage: {
-    type: Number,
-    default: 0
+    type: DataTypes.INTEGER,
+    defaultValue: 0
   },
   description: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   },
   is_active: {
-    type: Boolean,
-    default: true
+    type: DataTypes.BOOLEAN,
+    defaultValue: true
   }
 }, {
-  timestamps: true
+  tableName: 'codes_promo',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('CodePromo', codePromoSchema);
+module.exports = CodePromo;

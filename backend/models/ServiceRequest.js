@@ -1,89 +1,92 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const User = require('./User');
 
-const serviceRequestSchema = new mongoose.Schema({
+const ServiceRequest = sequelize.define('ServiceRequest', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   clientId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  demenageurId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  serviceType: {
-    type: String,
-    enum: ['demenagement', 'transport'],
-    required: true
-  },
-  departureAddress: {
-    type: String,
-    required: true
-  },
-  destinationAddress: {
-    type: String,
-    required: true
-  },
-  serviceDetails: {
-    type: mongoose.Schema.Types.Mixed,
-    required: true
-  },
-  scheduledDate: {
-    type: Date,
-    required: true
-  },
-  status: {
-    type: String,
-    enum: ['pending', 'accepted', 'in_progress', 'completed', 'cancelled'],
-    default: 'pending'
-  },
-  actualPrice: {
-    type: Number,
-    default: null
-  },
-  // Négociation de prix
-  proposedPrice: {
-    type: Number,
-    default: null
-  },
-  priceNegotiation: {
-    demenageurPrice: {
-      type: Number,
-      default: null
-    },
-    clientPrice: {
-      type: Number,
-      default: null
-    },
-    status: {
-      type: String,
-      enum: ['pending', 'accepted', 'negotiating'],
-      default: null
+    type: DataTypes.UUID,
+    allowNull: false,
+    field: 'client_id',
+    references: {
+      model: User,
+      key: 'id'
     }
   },
+  demenageurId: {
+    type: DataTypes.UUID,
+    allowNull: false,
+    field: 'demenageur_id',
+    references: {
+      model: User,
+      key: 'id'
+    }
+  },
+  serviceType: {
+    type: DataTypes.ENUM('demenagement', 'transport'),
+    allowNull: false,
+    field: 'service_type'
+  },
+  departureAddress: {
+    type: DataTypes.TEXT,
+    allowNull: false,
+    field: 'departure_address'
+  },
+  destinationAddress: {
+    type: DataTypes.TEXT,
+    allowNull: false,
+    field: 'destination_address'
+  },
+  serviceDetails: {
+    type: DataTypes.JSONB,
+    allowNull: false,
+    field: 'service_details',
+    defaultValue: {}
+  },
+  scheduledDate: {
+    type: DataTypes.DATE,
+    allowNull: false,
+    field: 'scheduled_date'
+  },
+  status: {
+    type: DataTypes.ENUM('pending', 'accepted', 'in_progress', 'completed', 'cancelled'),
+    defaultValue: 'pending'
+  },
+  actualPrice: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true,
+    field: 'actual_price'
+  },
+  proposedPrice: {
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true,
+    field: 'proposed_price'
+  },
+  priceNegotiation: {
+    type: DataTypes.JSONB,
+    defaultValue: {},
+    field: 'price_negotiation'
+  },
   notes: {
-    type: String,
-    default: ''
+    type: DataTypes.TEXT,
+    defaultValue: ''
   },
-  // Champ pour suivre si la demande a été vue par le déménageur
   viewedByDemenageur: {
-    type: Boolean,
-    default: false
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    field: 'viewed_by_demenageur'
   }
+}, {
+  tableName: 'service_requests',
+  timestamps: true,
+  underscored: true
 });
 
-// Middleware pour mettre à jour updatedAt
-serviceRequestSchema.pre('save', function(next) {
-  this.updatedAt = new Date();
-  next();
-});
+ServiceRequest.belongsTo(User, { foreignKey: 'clientId', as: 'client' });
+ServiceRequest.belongsTo(User, { foreignKey: 'demenageurId', as: 'demenageur' });
 
-module.exports = mongoose.model('ServiceRequest', serviceRequestSchema);
+module.exports = ServiceRequest;

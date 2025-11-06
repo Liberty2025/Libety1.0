@@ -1,34 +1,46 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
 
-const demenageurGiftSchema = new mongoose.Schema({
+const DemenageurGift = sequelize.define('DemenageurGift', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   name: {
-    type: String,
-    required: true,
-    maxlength: 255
+    type: DataTypes.STRING(255),
+    allowNull: false
   },
   description: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   },
   required_score: {
-    type: Number,
-    required: true,
-    min: 0
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    validate: {
+      min: 0
+    }
   },
   gift_type: {
-    type: String,
-    required: true,
-    maxlength: 50
+    type: DataTypes.STRING(50),
+    allowNull: false
   },
   value: {
-    type: Number,
-    min: 0
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: true,
+    validate: {
+      min: 0
+    }
   },
   is_active: {
-    type: Boolean,
-    default: true
+    type: DataTypes.BOOLEAN,
+    defaultValue: true
   }
 }, {
-  timestamps: true
+  tableName: 'demenageur_gifts',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('DemenageurGift', demenageurGiftSchema);
+module.exports = DemenageurGift;

@@ -1,46 +1,67 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const User = require('./User');
 
-const reservationSchema = new mongoose.Schema({
+const Reservation = sequelize.define('Reservation', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   client_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
   demenageur_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    type: DataTypes.UUID,
+    allowNull: true,
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
   date_reservation: {
-    type: Date,
-    required: true
+    type: DataTypes.DATE,
+    allowNull: false
   },
   adresse_depart: {
-    type: String,
-    required: true
+    type: DataTypes.TEXT,
+    allowNull: false
   },
   adresse_arrivee: {
-    type: String,
-    required: true
+    type: DataTypes.TEXT,
+    allowNull: false
   },
   volume_m3: {
-    type: Number,
-    required: true,
-    min: 0
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    validate: {
+      min: 0
+    }
   },
   description: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   },
   special_requirements: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   },
   status: {
-    type: String,
-    enum: ['en_attente', 'confirme', 'en_cours', 'termine', 'annule'],
-    default: 'en_attente',
-    maxlength: 20
+    type: DataTypes.ENUM('en_attente', 'confirme', 'en_cours', 'termine', 'annule'),
+    defaultValue: 'en_attente'
   }
 }, {
-  timestamps: true
+  tableName: 'reservations',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('Reservation', reservationSchema);
+Reservation.belongsTo(User, { foreignKey: 'client_id', as: 'client' });
+Reservation.belongsTo(User, { foreignKey: 'demenageur_id', as: 'demenageur' });
+
+module.exports = Reservation;

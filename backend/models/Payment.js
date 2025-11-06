@@ -1,32 +1,52 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const User = require('./User');
+const Reservation = require('./Reservation');
 
-const paymentSchema = new mongoose.Schema({
+const Payment = sequelize.define('Payment', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   user_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
   reservation_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Reservation'
+    type: DataTypes.UUID,
+    allowNull: true,
+    references: {
+      model: Reservation,
+      key: 'id'
+    }
   },
   amount: {
-    type: Number,
-    required: true,
-    min: 0
+    type: DataTypes.DECIMAL(10, 2),
+    allowNull: false,
+    validate: {
+      min: 0
+    }
   },
   payment_method: {
-    type: String,
-    maxlength: 50
+    type: DataTypes.STRING(50),
+    allowNull: true
   },
   status: {
-    type: String,
-    enum: ['pending', 'completed', 'failed', 'refunded'],
-    default: 'pending',
-    maxlength: 20
+    type: DataTypes.ENUM('pending', 'completed', 'failed', 'refunded'),
+    defaultValue: 'pending'
   }
 }, {
-  timestamps: true
+  tableName: 'payments',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('Payment', paymentSchema);
+Payment.belongsTo(User, { foreignKey: 'user_id' });
+Payment.belongsTo(Reservation, { foreignKey: 'reservation_id' });
+
+module.exports = Payment;

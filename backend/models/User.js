@@ -1,102 +1,102 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
 
-const userSchema = new mongoose.Schema({
+const User = sequelize.define('User', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   first_name: {
-    type: String,
-    required: true,
-    maxlength: 100
+    type: DataTypes.STRING(100),
+    allowNull: false
   },
   last_name: {
-    type: String,
-    required: true,
-    maxlength: 100
+    type: DataTypes.STRING(100),
+    allowNull: false
   },
   email: {
-    type: String,
-    required: true,
-    unique: true,
-    maxlength: 255
+    type: DataTypes.STRING(255),
+    allowNull: false,
+    unique: true
   },
   phone: {
-    type: String,
-    maxlength: 20
+    type: DataTypes.STRING(20),
+    allowNull: true
   },
   password: {
-    type: String,
-    required: true,
-    maxlength: 255
+    type: DataTypes.STRING(255),
+    allowNull: false
   },
   role: {
-    type: String,
-    required: true,
-    enum: ['client', 'demenageur', 'admin'],
-    maxlength: 20
+    type: DataTypes.ENUM('client', 'demenageur', 'admin'),
+    allowNull: false
   },
   identityCardNumber: {
-    type: String,
+    type: DataTypes.STRING(20),
     unique: true,
-    sparse: true,
-    maxlength: 20
+    allowNull: true
   },
   documents: {
-    drivingLicense: {
-      front: String,
-      back: String
-    },
-    vehicleRegistration: {
-      front: String,
-      back: String
-    },
-    identityCard: {
-      front: String,
-      back: String
-    }
+    type: DataTypes.JSONB,
+    defaultValue: {}
   },
   is_verified: {
-    type: Boolean,
-    default: false
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   },
   siret: {
-    type: String,
-    maxlength: 20
+    type: DataTypes.STRING(20),
+    allowNull: true
   },
   insurance_attestations: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   },
   permits: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   },
   address: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   },
   latitude: {
-    type: Number,
-    min: -90,
-    max: 90
+    type: DataTypes.DECIMAL(10, 8),
+    allowNull: true,
+    validate: {
+      min: -90,
+      max: 90
+    }
   },
   longitude: {
-    type: Number,
-    min: -180,
-    max: 180
+    type: DataTypes.DECIMAL(11, 8),
+    allowNull: true,
+    validate: {
+      min: -180,
+      max: 180
+    }
   },
   status: {
-    type: String,
-    enum: ['available', 'inactive', 'suspended', 'banned'],
-    default: 'available',
-    maxlength: 20
+    type: DataTypes.ENUM('available', 'inactive', 'suspended', 'banned'),
+    defaultValue: 'available'
   },
   is_admin: {
-    type: Boolean,
-    default: false
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   },
   banned_at: {
-    type: Date
+    type: DataTypes.DATE,
+    allowNull: true
   },
   ban_reason: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   }
 }, {
-  timestamps: true
+  tableName: 'users',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = User;

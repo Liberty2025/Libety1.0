@@ -1,54 +1,79 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const User = require('./User');
 
-const moverProfileSchema = new mongoose.Schema({
+const MoverProfile = sequelize.define('MoverProfile', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   user_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
-    unique: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    unique: true,
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
   company_name: {
-    type: String,
-    maxlength: 255
+    type: DataTypes.STRING(255),
+    allowNull: true
   },
   description: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   },
   experience_years: {
-    type: Number,
-    min: 0
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    validate: {
+      min: 0
+    }
   },
-  services_offered: [{
-    type: String
-  }],
-  equipment_available: [{
-    type: String
-  }],
+  services_offered: {
+    type: DataTypes.ARRAY(DataTypes.STRING),
+    defaultValue: []
+  },
+  equipment_available: {
+    type: DataTypes.ARRAY(DataTypes.STRING),
+    defaultValue: []
+  },
   insurance_coverage: {
-    type: Boolean,
-    default: false
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   },
   license_number: {
-    type: String,
-    maxlength: 100
+    type: DataTypes.STRING(100),
+    allowNull: true
   },
   rating: {
-    type: Number,
-    default: 0.00,
-    min: 0,
-    max: 5
+    type: DataTypes.DECIMAL(3, 2),
+    defaultValue: 0.00,
+    validate: {
+      min: 0,
+      max: 5
+    }
   },
   total_reviews: {
-    type: Number,
-    default: 0,
-    min: 0
+    type: DataTypes.INTEGER,
+    defaultValue: 0,
+    validate: {
+      min: 0
+    }
   },
   is_verified: {
-    type: Boolean,
-    default: false
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   }
 }, {
-  timestamps: true
+  tableName: 'mover_profiles',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('MoverProfile', moverProfileSchema);
+MoverProfile.belongsTo(User, { foreignKey: 'user_id' });
+User.hasOne(MoverProfile, { foreignKey: 'user_id' });
+
+module.exports = MoverProfile;

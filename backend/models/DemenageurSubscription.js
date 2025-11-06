@@ -1,38 +1,51 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const User = require('./User');
 
-const demenageurSubscriptionSchema = new mongoose.Schema({
+const DemenageurSubscription = sequelize.define('DemenageurSubscription', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   demenageur_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
   subscription_type: {
-    type: String,
-    required: true,
-    maxlength: 50
+    type: DataTypes.STRING(50),
+    allowNull: false
   },
   status: {
-    type: String,
-    enum: ['active', 'inactive', 'cancelled'],
-    default: 'active',
-    maxlength: 20
+    type: DataTypes.ENUM('active', 'inactive', 'cancelled'),
+    defaultValue: 'active'
   },
   start_date: {
-    type: Date,
-    required: true
+    type: DataTypes.DATE,
+    allowNull: false
   },
   end_date: {
-    type: Date
+    type: DataTypes.DATE,
+    allowNull: true
   },
   payment_method: {
-    type: String,
-    maxlength: 50
+    type: DataTypes.STRING(50),
+    allowNull: true
   },
   metadata: {
-    type: mongoose.Schema.Types.Mixed
+    type: DataTypes.JSONB,
+    defaultValue: {}
   }
 }, {
-  timestamps: true
+  tableName: 'demenageur_subscriptions',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('DemenageurSubscription', demenageurSubscriptionSchema);
+DemenageurSubscription.belongsTo(User, { foreignKey: 'demenageur_id' });
+
+module.exports = DemenageurSubscription;

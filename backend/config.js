@@ -1,7 +1,13 @@
 module.exports = {
-  // Configuration de la base de données
-  mongodb: {
-    uri: process.env.MONGODB_URI || 'mongodb+srv://username:password@cluster.mongodb.net/liberty_mobile?retryWrites=true&w=majority'
+  // Configuration de la base de données PostgreSQL
+  database: {
+    url: process.env.DATABASE_URL,
+    host: process.env.DB_HOST || 'localhost',
+    port: process.env.DB_PORT || 5432,
+    user: process.env.DB_USER || 'liberty',
+    password: process.env.DB_PASSWORD || 'motdepassefort',
+    database: process.env.DB_NAME || 'liberty',
+    ssl: process.env.DATABASE_SSL === 'true'
   },
   
   // Configuration JWT

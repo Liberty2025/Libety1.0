@@ -1,42 +1,51 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const sequelize = require('../config/sequelize');
+const User = require('./User');
 
-const ticketSchema = new mongoose.Schema({
+const Ticket = sequelize.define('Ticket', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   client_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.UUID,
+    allowNull: false,
+    references: {
+      model: User,
+      key: 'id'
+    }
   },
   type: {
-    type: String,
-    required: true,
-    maxlength: 50
+    type: DataTypes.STRING(50),
+    allowNull: false
   },
   subject: {
-    type: String,
-    required: true,
-    maxlength: 255
+    type: DataTypes.STRING(255),
+    allowNull: false
   },
   description: {
-    type: String,
-    required: true
+    type: DataTypes.TEXT,
+    allowNull: false
   },
   status: {
-    type: String,
-    enum: ['open', 'in_progress', 'resolved', 'closed'],
-    default: 'open',
-    maxlength: 20
+    type: DataTypes.ENUM('open', 'in_progress', 'resolved', 'closed'),
+    defaultValue: 'open'
   },
   priority: {
-    type: String,
-    enum: ['low', 'medium', 'high', 'urgent'],
-    default: 'medium',
-    maxlength: 20
+    type: DataTypes.ENUM('low', 'medium', 'high', 'urgent'),
+    defaultValue: 'medium'
   },
   admin_response: {
-    type: String
+    type: DataTypes.TEXT,
+    allowNull: true
   }
 }, {
-  timestamps: true
+  tableName: 'tickets',
+  timestamps: true,
+  underscored: true
 });
 
-module.exports = mongoose.model('Ticket', ticketSchema);
+Ticket.belongsTo(User, { foreignKey: 'client_id' });
+
+module.exports = Ticket;

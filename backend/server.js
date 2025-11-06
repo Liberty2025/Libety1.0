@@ -1,5 +1,5 @@
 const express = require('express');
-const mongoose = require('mongoose');
+const pool = require('./db');
 const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -10,8 +10,12 @@ const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"]
+  },
+  transports: ['websocket', 'polling'],
+  allowEIO3: true
 });
 const PORT = process.env.PORT || 3000;
 
@@ -29,17 +33,15 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Connexion à MongoDB Atlas
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-.then(() => {
-  console.log('✅ Connexion à MongoDB Atlas réussie');
-})
-.catch((error) => {
-  console.error('❌ Erreur de connexion à MongoDB:', error);
-});
+// Test de connexion PostgreSQL
+(async () => {
+  try {
+    const result = await pool.query('SELECT NOW()');
+    console.log('✅ Connexion à PostgreSQL réussie !', result.rows[0]);
+  } catch (error) {
+    console.error('❌ Erreur de connexion à PostgreSQL:', error);
+  }
+})();
 
 // Import des routes
 const authRoutes = require('./routes/auth');
@@ -71,12 +73,21 @@ app.get('/', (req, res) => {
   });
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK',
-    database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
-    timestamp: new Date().toISOString()
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ 
+      status: 'OK',
+      database: 'Connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.json({ 
+      status: 'OK',
+      database: 'Disconnected',
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // Routes API
@@ -93,6 +104,8 @@ app.use('/api/statistics', statisticsRoutes);
 io.on('connection', (socket) => {
   console.log('🔌 Client connecté:', socket.id);
   console.log('🔍 Handshake auth:', socket.handshake.auth);
+  console.log('🌐 Origine de la connexion:', socket.handshake.headers.origin || 'N/A');
+  console.log('📡 Transport utilisé:', socket.conn.transport.name);
 
   // Authentification automatique avec le token
   const token = socket.handshake.auth.token;
@@ -170,58 +183,64 @@ io.on('connection', (socket) => {
       console.log('📤 Message reçu via WebSocket:', { chatId, content, userId, userRole });
 
       // Vérifier que l'utilisateur a accès à ce chat
-      const { Chat, ChatMessage } = require('./models');
-      const chat = await Chat.findById(chatId);
+      const { queryOne, query } = require('./utils/dbHelpers');
+      const chat = await queryOne(
+        'SELECT * FROM chats WHERE id = $1',
+        [chatId]
+      );
       
       if (!chat) {
         console.log('❌ Chat non trouvé:', chatId);
         return;
       }
 
-      if (chat.clientId.toString() !== userId && chat.demenageurId.toString() !== userId) {
+      if (chat.client_id !== userId && chat.demenageur_id !== userId) {
         console.log('❌ Accès non autorisé au chat:', chatId);
         return;
       }
 
       // Créer le message
-      const message = new ChatMessage({
-        chatId,
-        serviceRequestId: chat.serviceRequestId,
-        senderId: userId,
-        senderType: userRole,
-        content,
-        messageType,
-        status: 'sent'
-      });
-
-      await message.save();
+      const messageResult = await query(
+        `INSERT INTO chat_messages (id, chat_id, service_request_id, sender_id, sender_type, content, message_type, status, created_at, updated_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+         RETURNING *`,
+        [chatId, chat.service_request_id, userId, userRole, content, messageType, 'sent']
+      );
+      const message = messageResult.rows[0];
 
       // Mettre à jour le chat
-      chat.lastMessageAt = new Date();
-      
-      // Incrémenter les messages non lus pour l'autre utilisateur
       if (userRole === 'client') {
-        chat.unreadByDemenageur += 1;
+        await query(
+          `UPDATE chats 
+           SET last_message_at = NOW(), unread_by_demenageur = unread_by_demenageur + 1
+           WHERE id = $1`,
+          [chatId]
+        );
       } else {
-        chat.unreadByClient += 1;
+        await query(
+          `UPDATE chats 
+           SET last_message_at = NOW(), unread_by_client = unread_by_client + 1
+           WHERE id = $1`,
+          [chatId]
+        );
       }
 
-      await chat.save();
-
-      // Récupérer le message avec les informations de l'expéditeur
-      const messageWithSender = await ChatMessage.findById(message._id)
-        .populate('senderId', 'first_name last_name');
+      // Récupérer les informations de l'expéditeur
+      const sender = await queryOne(
+        'SELECT first_name, last_name FROM users WHERE id = $1',
+        [userId]
+      );
 
       // Émettre le message à tous les participants du chat
       io.to(`chat_${chatId}`).emit('new_message', {
         chatId,
         message: {
-          _id: message._id,
+          id: message.id,
           content: message.content,
-          senderType: message.senderType,
-          senderName: `${messageWithSender.senderId.first_name} ${messageWithSender.senderId.last_name}`,
-          messageType: message.messageType,
-          createdAt: message.createdAt,
+          senderType: message.sender_type,
+          senderName: sender ? `${sender.first_name} ${sender.last_name}` : 'Unknown',
+          messageType: message.message_type,
+          createdAt: message.created_at,
           status: message.status
         }
       });
@@ -241,38 +260,49 @@ io.on('connection', (socket) => {
 
       console.log('👁️ Marquage des messages comme lus:', { chatId, userId, userRole });
 
-      const { Chat, ChatMessage } = require('./models');
-      const chat = await Chat.findById(chatId);
+      const { queryOne, query } = require('./utils/dbHelpers');
+      const chat = await queryOne(
+        'SELECT * FROM chats WHERE id = $1',
+        [chatId]
+      );
       
       if (!chat) {
         console.log('❌ Chat non trouvé:', chatId);
         return;
       }
 
-      if (chat.clientId.toString() !== userId && chat.demenageurId.toString() !== userId) {
+      if (chat.client_id !== userId && chat.demenageur_id !== userId) {
         console.log('❌ Accès non autorisé au chat:', chatId);
         return;
       }
 
       // Marquer les messages comme lus
       if (userRole === 'client') {
-        chat.unreadByClient = 0;
-        await ChatMessage.updateMany(
-          { chatId, senderType: 'demenageur', status: 'sent' },
-          { status: 'read', readAt: new Date() }
+        await query(
+          `UPDATE chats SET unread_by_client = 0 WHERE id = $1`,
+          [chatId]
+        );
+        await query(
+          `UPDATE chat_messages 
+           SET status = 'read', read_at = NOW() 
+           WHERE chat_id = $1 AND sender_type = 'demenageur' AND status = 'sent'`,
+          [chatId]
         );
       } else if (userRole === 'demenageur') {
-        chat.unreadByDemenageur = 0;
-        await ChatMessage.updateMany(
-          { chatId, senderType: 'client', status: 'sent' },
-          { status: 'read', readAt: new Date() }
+        await query(
+          `UPDATE chats SET unread_by_demenageur = 0 WHERE id = $1`,
+          [chatId]
+        );
+        await query(
+          `UPDATE chat_messages 
+           SET status = 'read', read_at = NOW() 
+           WHERE chat_id = $1 AND sender_type = 'client' AND status = 'sent'`,
+          [chatId]
         );
       }
 
-      await chat.save();
-
       // Notifier l'autre utilisateur que les messages ont été lus
-      const targetUserId = userRole === 'client' ? chat.demenageurId : chat.clientId;
+      const targetUserId = userRole === 'client' ? chat.demenageur_id : chat.client_id;
       io.to(`user_${targetUserId}`).emit('messages_read', {
         chatId,
         readBy: userId
@@ -285,8 +315,12 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('disconnect', () => {
-    console.log('🔌 Client déconnecté:', socket.id);
+  socket.on('disconnect', (reason) => {
+    console.log('🔌 Client déconnecté:', socket.id, 'Raison:', reason);
+  });
+
+  socket.on('error', (error) => {
+    console.error('❌ Erreur WebSocket:', error);
   });
 });
 
