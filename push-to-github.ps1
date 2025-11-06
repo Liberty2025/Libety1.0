@@ -1,5 +1,7 @@
 # Script pour pousser le code vers GitHub avec le token
-$token = "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"
+# ATTENTION: Ne jamais commiter ce fichier avec un token réel !
+# Utilisez une variable d'environnement ou un fichier de configuration local
+$token = "VOTRE_TOKEN_ICI"  # Remplacez par votre token ou utilisez $env:GITHUB_TOKEN
 $repo = "https://github.com/Liberty2025/Libety1.0.git"
 
 # Supprimer les credentials en cache
