@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import io from 'socket.io-client';
-import { getWebSocketURL } from '../config/api';
+import { getAPIBaseURL } from '../config/api';
 
 const useWebSocket = (userData) => {
   const [socket, setSocket] = useState(null);
@@ -11,13 +11,19 @@ const useWebSocket = (userData) => {
   useEffect(() => {
     if (!userData || !userData.token) return;
 
+    // Socket.IO utilise l'URL HTTP directement, pas ws://
+    const API_BASE_URL = getAPIBaseURL();
+    
     // Créer la connexion WebSocket avec authentification automatique
-    const newSocket = io(getWebSocketURL(), {
-      transports: ['websocket'],
+    const newSocket = io(API_BASE_URL, {
+      transports: ['websocket', 'polling'],
       timeout: 20000,
       auth: {
         token: userData.token
-      }
+      },
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000
     });
 
     socketRef.current = newSocket;
@@ -37,6 +43,13 @@ const useWebSocket = (userData) => {
 
     newSocket.on('connect_error', (error) => {
       console.error('❌ Erreur de connexion WebSocket:', error);
+      console.error('❌ Détails de l\'erreur:', {
+        message: error.message,
+        type: error.type,
+        description: error.description,
+        context: error.context,
+        url: API_BASE_URL
+      });
       setIsConnected(false);
     });
 

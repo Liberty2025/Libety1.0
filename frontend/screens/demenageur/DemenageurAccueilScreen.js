@@ -10,6 +10,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import * as Location from 'expo-location';
+import { getAPIBaseURL } from '../../config/api';
 
 const DemenageurAccueilScreen = ({ authToken, onTestNotification, connectionStatus }) => {
   const [location, setLocation] = useState(null);
@@ -49,7 +50,7 @@ const DemenageurAccueilScreen = ({ authToken, onTestNotification, connectionStat
         return;
       }
 
-      const API_BASE_URL = Platform.OS === 'android' ? 'http://192.168.1.13:3000' : 'http://localhost:3000';
+      const API_BASE_URL = getAPIBaseURL();
       console.log('🔍 Chargement des missions depuis:', `${API_BASE_URL}/api/service-requests/demenageur`);
       console.log('🔑 Token utilisé:', authToken ? 'PRÉSENT' : 'ABSENT');
       

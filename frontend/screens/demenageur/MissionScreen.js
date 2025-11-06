@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import useWebSocket from '../../hooks/useWebSocket';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Calendar } from 'react-native-calendars';
+import { getAPIBaseURL } from '../../config/api';
 
 const MissionScreen = ({ userData, navigation }) => {
   const [missions, setMissions] = useState([]);
@@ -57,11 +58,12 @@ const MissionScreen = ({ userData, navigation }) => {
       console.log('📋 Statut mis à jour reçu:', data);
       // Mettre à jour directement l'état local pour une synchronisation instantanée
       setMissions(prevMissions => 
-        prevMissions.map(mission => 
-          mission._id === data.missionId 
+        prevMissions.map(mission => {
+          const missionId = mission.id || mission._id;
+          return missionId === data.missionId 
             ? { ...mission, status: data.newStatus }
-            : mission
-        )
+            : mission;
+        })
       );
     };
 
@@ -76,11 +78,12 @@ const MissionScreen = ({ userData, navigation }) => {
       console.log('💰 Prix proposé reçu:', data);
       // Mettre à jour directement l'état local pour afficher le prix proposé
       setMissions(prevMissions => 
-        prevMissions.map(mission => 
-          mission._id === data.missionId 
+        prevMissions.map(mission => {
+          const missionId = mission.id || mission._id;
+          return missionId === data.missionId 
             ? { ...mission, proposedPrice: data.proposedPrice }
-            : mission
-        )
+            : mission;
+        })
       );
     };
 
@@ -104,7 +107,7 @@ const MissionScreen = ({ userData, navigation }) => {
       if (showLoading) {
         setLoading(true);
       }
-      const API_BASE_URL = 'http://192.168.1.13:3000';
+      const API_BASE_URL = getAPIBaseURL();
 
       const token = userData?.token;
       if (!token) {
@@ -145,7 +148,7 @@ const MissionScreen = ({ userData, navigation }) => {
 
   const updateMissionStatus = async (missionId, newStatus) => {
     try {
-      const API_BASE_URL = 'http://192.168.1.13:3000';
+      const API_BASE_URL = getAPIBaseURL();
       const token = userData?.token;
 
       const response = await fetch(`${API_BASE_URL}/api/service-requests/${missionId}/status`, {
@@ -173,7 +176,7 @@ const MissionScreen = ({ userData, navigation }) => {
 
   const handleAcceptNegotiation = async (missionId) => {
     try {
-      const API_BASE_URL = 'http://192.168.1.13:3000';
+      const API_BASE_URL = getAPIBaseURL();
       const token = userData?.token;
 
       const response = await fetch(`${API_BASE_URL}/api/service-requests/${missionId}/accept-negotiation`, {
@@ -219,7 +222,7 @@ const MissionScreen = ({ userData, navigation }) => {
     }
 
     try {
-      const API_BASE_URL = 'http://192.168.1.13:3000';
+      const API_BASE_URL = getAPIBaseURL();
       const token = userData?.token;
 
       const response = await fetch(`${API_BASE_URL}/api/service-requests/${selectedMissionId}/propose-price`, {
@@ -356,9 +359,12 @@ const MissionScreen = ({ userData, navigation }) => {
     return statusMatch && dateMatch;
   });
 
-  const renderMission = (mission) => (
+  const renderMission = (mission) => {
+    // Utiliser id (PostgreSQL) ou _id (MongoDB) pour la clé
+    const missionId = mission.id || mission._id;
+    
+    return (
     <TouchableOpacity 
-      key={mission._id} 
       style={styles.missionCard}
       onPress={() => navigation.navigate('MissionDetails', { mission, userData })}
       activeOpacity={0.7}
@@ -419,7 +425,7 @@ const MissionScreen = ({ userData, navigation }) => {
         <View style={styles.negotiationActions}>
           <TouchableOpacity 
             style={[styles.actionButton, styles.acceptButton]}
-            onPress={() => handleAcceptNegotiation(mission._id)}
+            onPress={() => handleAcceptNegotiation(missionId)}
           >
             <Ionicons name="checkmark" size={16} color="#ffffff" />
             <Text style={styles.actionButtonText}>Accepter</Text>
@@ -427,7 +433,7 @@ const MissionScreen = ({ userData, navigation }) => {
           
           <TouchableOpacity 
             style={[styles.actionButton, styles.negotiateButton]}
-            onPress={() => handleNegotiate(mission._id)}
+            onPress={() => handleNegotiate(missionId)}
           >
             <Ionicons name="swap-horizontal" size={16} color="#ffffff" />
             <Text style={styles.actionButtonText}>Négocier</Text>
@@ -436,7 +442,8 @@ const MissionScreen = ({ userData, navigation }) => {
       )}
 
     </TouchableOpacity>
-  );
+    );
+  };
 
   if (loading) {
     return (
@@ -571,7 +578,11 @@ const MissionScreen = ({ userData, navigation }) => {
             </Text>
           </View>
         ) : (
-          filteredMissions.map(renderMission)
+          filteredMissions.map((mission) => {
+            const missionId = mission.id || mission._id;
+            const rendered = renderMission(mission);
+            return React.cloneElement(rendered, { key: missionId });
+          })
         )}
       </ScrollView>
 

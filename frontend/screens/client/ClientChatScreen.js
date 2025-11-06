@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import useRealtimeChat from '../../hooks/useRealtimeChat';
+import { getAPIBaseURL } from '../../config/api';
 
 const ClientChatScreen = ({ authToken, userData }) => {
   const [chats, setChats] = useState([]);
@@ -21,7 +22,8 @@ const ClientChatScreen = ({ authToken, userData }) => {
   const [loading, setLoading] = useState(false);
   const scrollViewRef = useRef(null);
 
-  const API_BASE_URL = Platform.OS === 'android' ? 'http://192.168.1.13:3000' : 'http://192.168.1.13:3000';
+  // Utiliser la configuration API centralisée
+  const API_BASE_URL = getAPIBaseURL();
 
   // Hook pour le chat en temps réel - utiliser l'ID utilisateur réel
   const { 
@@ -163,6 +165,7 @@ const ClientChatScreen = ({ authToken, userData }) => {
 
   const loadChats = async () => {
     console.log('📋 Chargement de la liste des chats...');
+    console.log('🌐 URL utilisée:', `${API_BASE_URL}/api/chat/my-chats`);
     try {
       setLoading(true);
       const response = await fetch(`${API_BASE_URL}/api/chat/my-chats`, {
@@ -172,6 +175,14 @@ const ClientChatScreen = ({ authToken, userData }) => {
           'Content-Type': 'application/json',
         },
       });
+
+      console.log('📥 Réponse reçue:', response.status, response.statusText);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ Erreur HTTP:', response.status, errorText);
+        throw new Error(`Erreur HTTP: ${response.status}`);
+      }
 
       // Vérifier que la réponse est bien JSON
       const contentType = response.headers.get('content-type');
@@ -185,14 +196,46 @@ const ClientChatScreen = ({ authToken, userData }) => {
       }
 
       const result = await response.json();
+      console.log('📋 Résultat:', result);
+      
       if (result.success) {
-        console.log('✅ Chats chargés avec succès:', result.chats.length, 'chats');
-        setChats(result.chats);
+        console.log('✅ Chats chargés avec succès:', result.chats?.length || 0, 'chats');
+        // Transformer les données pour correspondre au format attendu par le frontend
+        const transformedChats = (result.chats || []).map(chat => ({
+          _id: chat.id || chat._id,
+          demenageurId: {
+            _id: chat.demenageur_id, // Colonne de la table chats
+            first_name: chat.demenageur_first_name, // Alias du JOIN
+            last_name: chat.demenageur_last_name, // Alias du JOIN
+            email: null, // Non retourné par la requête actuelle
+            phone: null, // Non retourné par la requête actuelle
+            is_verified: false // Non retourné par la requête actuelle
+          },
+          serviceRequestId: {
+            _id: chat.service_request_id, // Colonne de la table chats
+            serviceType: chat.service_type, // Alias du JOIN
+            departureAddress: chat.departure_address // Alias du JOIN
+          },
+          lastMessage: chat.lastMessage ? {
+            _id: chat.lastMessage.id || null,
+            content: chat.lastMessage.content,
+            createdAt: chat.lastMessage.createdAt || chat.lastMessage.created_at,
+            senderType: chat.lastMessage.senderType || chat.lastMessage.sender_type
+          } : null,
+          lastMessageAt: chat.last_message_at || chat.lastMessageAt || chat.created_at,
+          unreadByClient: chat.unread_by_client || chat.unreadByClient || 0,
+          createdAt: chat.created_at || chat.createdAt
+        }));
+        console.log('📋 Chats transformés:', transformedChats.length);
+        setChats(transformedChats);
       } else {
-        console.error('Erreur lors du chargement des chats:', result.message);
+        console.error('❌ Erreur lors du chargement des chats:', result.message);
+        Alert.alert('Erreur', result.message || 'Erreur lors du chargement des conversations');
       }
     } catch (error) {
-      console.error('Erreur de connexion:', error);
+      console.error('❌ Erreur de connexion:', error);
+      console.error('❌ Détails:', error.message);
+      Alert.alert('Erreur', `Erreur de connexion au serveur: ${error.message}`);
     } finally {
       setLoading(false);
     }

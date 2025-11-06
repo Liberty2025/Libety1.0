@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import { getAPIBaseURL } from '../../config/api';
 
 const DemenageurAuthScreen = ({ onAuthSuccess, onBack }) => {
   const [isLogin, setIsLogin] = useState(true);
@@ -105,12 +106,10 @@ const DemenageurAuthScreen = ({ onAuthSuccess, onBack }) => {
     if (!validateForm()) return;
 
     try {
-      // Configuration de l'API
-      const API_BASE_URL = Platform.OS === 'android' 
-        ? 'http://192.168.1.13:3000' 
-        : 'http://192.168.1.13:3000';
-
+      const API_BASE_URL = getAPIBaseURL();
       const endpoint = isLogin ? '/api/auth/demenageur/login' : '/api/auth/demenageur/register';
+      
+      console.log(`📤 Tentative de ${isLogin ? 'connexion' : 'inscription'} déménageur:`, `${API_BASE_URL}${endpoint}`);
       
       if (isLogin) {
         const requestData = { 
@@ -122,11 +121,24 @@ const DemenageurAuthScreen = ({ onAuthSuccess, onBack }) => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'Accept': 'application/json',
           },
           body: JSON.stringify(requestData),
         });
 
-        const result = await response.json();
+        console.log(`📥 Réponse reçue: ${response.status} ${response.statusText}`);
+
+        let result;
+        try {
+          result = await response.json();
+        } catch (jsonError) {
+          const errorText = await response.text();
+          console.error('❌ Erreur de parsing JSON:', errorText);
+          Alert.alert('Erreur', `Erreur serveur: ${response.status} ${response.statusText}`);
+          return;
+        }
+
+        console.log(`📋 Résultat:`, { success: result.success, message: result.message });
 
         if (result.success) {
           Alert.alert(
@@ -192,15 +204,30 @@ const DemenageurAuthScreen = ({ onAuthSuccess, onBack }) => {
           });
         }
 
+        console.log(`📤 Envoi de l'inscription avec ${Object.keys(documents).length * 2} documents`);
+
         const response = await fetch(`${API_BASE_URL}${endpoint}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'multipart/form-data',
+            'Accept': 'application/json',
           },
           body: formDataToSend,
         });
 
-        const result = await response.json();
+        console.log(`📥 Réponse reçue: ${response.status} ${response.statusText}`);
+
+        let result;
+        try {
+          result = await response.json();
+        } catch (jsonError) {
+          const errorText = await response.text();
+          console.error('❌ Erreur de parsing JSON:', errorText);
+          Alert.alert('Erreur', `Erreur serveur: ${response.status} ${response.statusText}`);
+          return;
+        }
+
+        console.log(`📋 Résultat:`, { success: result.success, message: result.message });
 
         if (result.success) {
           Alert.alert(
@@ -213,8 +240,13 @@ const DemenageurAuthScreen = ({ onAuthSuccess, onBack }) => {
         }
       }
     } catch (error) {
-      console.error('Erreur d\'authentification:', error);
-      Alert.alert('Erreur', 'Erreur de connexion au serveur');
+      console.error('❌ Erreur d\'authentification:', error);
+      console.error('❌ Détails:', error.message);
+      if (error.message.includes('Network request failed') || error.message.includes('ECONNREFUSED')) {
+        Alert.alert('Erreur de connexion', 'Impossible de se connecter au serveur. Vérifiez votre connexion internet.');
+      } else {
+        Alert.alert('Erreur', `Erreur de connexion au serveur: ${error.message}`);
+      }
     }
   };
 

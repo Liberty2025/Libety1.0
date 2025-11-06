@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 import io from 'socket.io-client';
+import { getAPIBaseURL } from '../config/api';
 
 const useNotificationSocket = (authToken, demenageurId) => {
   const [notifications, setNotifications] = useState([]);
@@ -45,7 +46,8 @@ const useNotificationSocket = (authToken, demenageurId) => {
       socketRef.current = null;
     }
 
-    const API_BASE_URL = Platform.OS === 'android' ? 'http://192.168.1.13:3000' : 'http://localhost:3000';
+    // Utiliser la configuration API centralisée
+    const API_BASE_URL = getAPIBaseURL();
     
     console.log('🔌 Connexion WebSocket pour notifications déménageur:', demenageurId);
     console.log('🔑 Token utilisé:', authToken ? 'PRÉSENT' : 'ABSENT');

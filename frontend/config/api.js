@@ -6,14 +6,18 @@ const API_CONFIG = {
   production: [
     'https://liberty-mobile-backend.herokuapp.com', // URL Heroku (à créer)
     'https://liberty-mobile.railway.app', // URL Railway (à créer)
-    'http://192.168.1.13:3000', // IP locale (pour développement local)
+    'http://192.168.1.13:8000', // IP locale (pour développement local - port 8000)
+    'http://192.168.1.13:3000', // IP locale (pour développement local - port 3000 fallback)
   ],
   
   // URLs de développement local
   development: [
-    'http://192.168.1.13:3000', // IP locale
-    'http://localhost:3000', // Localhost pour émulateur
-    'http://10.0.2.2:3000', // IP émulateur Android
+    'http://192.168.1.13:8000', // IP locale (port 8000)
+    'http://192.168.1.13:3000', // IP locale (port 3000 - fallback)
+    'http://localhost:8000', // Localhost pour émulateur (port 8000)
+    'http://localhost:3000', // Localhost pour émulateur (port 3000 - fallback)
+    'http://10.0.2.2:8000', // IP émulateur Android (port 8000)
+    'http://10.0.2.2:3000', // IP émulateur Android (port 3000 - fallback)
   ]
 };
 
@@ -36,9 +40,9 @@ export const getAPIBaseURL = () => {
     return API_CONFIG.production[0]; // Utiliser la première URL de production
   }
   
-  // Sinon, utiliser les URLs de développement
+  // Sinon, utiliser les URLs de développement (port 8000 en priorité)
   console.log('💻 Mode développement local');
-  return API_CONFIG.development[0];
+  return API_CONFIG.development[0]; // Port 8000 en premier
 };
 
 // Fonction pour tester la connectivité

@@ -13,6 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import useWebSocket from '../../hooks/useWebSocket';
+import { getAPIBaseURL } from '../../config/api';
 
 const MissionDetailsScreen = ({ route, navigation }) => {
   const { mission, userData, onRouteData } = route.params;
@@ -29,7 +30,7 @@ const MissionDetailsScreen = ({ route, navigation }) => {
   const [proposedPrice, setProposedPrice] = useState('');
   const [currentMission, setCurrentMission] = useState(mission);
 
-  const API_BASE_URL = 'http://192.168.1.13:3000';
+  const API_BASE_URL = getAPIBaseURL();
   
   // WebSocket hook
   const { isConnected, onEvent, offEvent } = useWebSocket(userData);
@@ -40,7 +41,8 @@ const MissionDetailsScreen = ({ route, navigation }) => {
 
     // Écouter les changements de statut
     const handleStatusUpdated = (data) => {
-      if (data.missionId === currentMission._id) {
+      const missionId = currentMission.id || currentMission._id;
+      if (data.missionId === missionId) {
         console.log('📋 Statut mis à jour reçu:', data);
         setCurrentMission(prev => ({
           ...prev,
@@ -51,7 +53,8 @@ const MissionDetailsScreen = ({ route, navigation }) => {
 
     // Écouter les négociations de prix du client
     const handlePriceNegotiated = (data) => {
-      if (data.missionId === currentMission._id) {
+      const missionId = currentMission.id || currentMission._id;
+      if (data.missionId === missionId) {
         console.log('💰 Prix négocié reçu:', data);
         setCurrentMission(prev => ({
           ...prev,
@@ -66,7 +69,8 @@ const MissionDetailsScreen = ({ route, navigation }) => {
 
     // Écouter l'acceptation de prix par le client
     const handlePriceAccepted = (data) => {
-      if (data.missionId === currentMission._id) {
+      const missionId = currentMission.id || currentMission._id;
+      if (data.missionId === missionId) {
         console.log('✅ Prix accepté reçu:', data);
         setCurrentMission(prev => ({
           ...prev,
@@ -89,13 +93,14 @@ const MissionDetailsScreen = ({ route, navigation }) => {
       offEvent('price_negotiated', handlePriceNegotiated);
       offEvent('price_accepted', handlePriceAccepted);
     };
-  }, [isConnected, onEvent, offEvent, currentMission._id]);
+  }, [isConnected, onEvent, offEvent, currentMission.id, currentMission._id]);
 
   const updateMissionStatus = async (newStatus) => {
     try {
       setLoading(true);
       
-      const response = await fetch(`${API_BASE_URL}/api/service-requests/${currentMission._id}/status`, {
+      const missionId = currentMission.id || currentMission._id;
+      const response = await fetch(`${API_BASE_URL}/api/service-requests/${missionId}/status`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${userData.token}`,
@@ -196,7 +201,7 @@ const MissionDetailsScreen = ({ route, navigation }) => {
               console.log('🚀 Navigation vers Accueil avec itinéraire:', {
                 departureAddress: currentMission.departureAddress,
                 destinationAddress: currentMission.destinationAddress,
-                clientName: currentMission.clientId?.first_name || 'Client',
+                clientName: currentMission.clientId?.firstName || currentMission.clientId?.first_name || 'Client',
                 demenageurLocation: demenageurLocation
               });
               
@@ -204,8 +209,8 @@ const MissionDetailsScreen = ({ route, navigation }) => {
               const routeDataToPass = {
                 departureAddress: currentMission.departureAddress,
                 destinationAddress: currentMission.destinationAddress,
-                missionId: currentMission._id,
-                clientName: currentMission.clientId?.first_name || 'Client',
+                missionId: currentMission.id || currentMission._id,
+                clientName: currentMission.clientId?.firstName || currentMission.clientId?.first_name || 'Client',
                 serviceType: currentMission.serviceType,
                 demenageurLocation: demenageurLocation // Position du déménageur
               };
@@ -274,14 +279,20 @@ const MissionDetailsScreen = ({ route, navigation }) => {
   };
 
   const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('fr-FR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+    if (!dateString) return 'Non défini';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'Date invalide';
+      return date.toLocaleDateString('fr-FR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch (error) {
+      return 'Date invalide';
+    }
   };
 
   const handleProposePrice = () => {
@@ -302,7 +313,8 @@ const MissionDetailsScreen = ({ route, navigation }) => {
     try {
       setLoading(true);
       
-      const response = await fetch(`${API_BASE_URL}/api/service-requests/${currentMission._id}/propose-price`, {
+      const missionId = currentMission.id || currentMission._id;
+      const response = await fetch(`${API_BASE_URL}/api/service-requests/${missionId}/propose-price`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${userData.token}`,
@@ -428,7 +440,9 @@ const MissionDetailsScreen = ({ route, navigation }) => {
             <Ionicons name="person" size={20} color="#ff6b35" />
             <View style={styles.infoContent}>
               <Text style={styles.infoLabel}>Client</Text>
-              <Text style={styles.infoValue}>{currentMission.clientId?.first_name}</Text>
+              <Text style={styles.infoValue}>
+                {currentMission.clientId?.firstName || currentMission.clientId?.first_name || 'Non disponible'}
+              </Text>
             </View>
           </View>
 

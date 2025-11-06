@@ -10,6 +10,58 @@ import { getAPIBaseURL } from '../../config/api';
 
 const API_BASE_URL = getAPIBaseURL();
 
+// Composant pour afficher un déménageur dans la liste
+const DemenageurItem = ({ demenageur, onSelect, t, styles }) => {
+  // Toujours afficher le nom complet (first_name + last_name)
+  const fullName = `${demenageur.first_name || ''} ${demenageur.last_name || ''}`.trim() || 'Déménageur';
+  const companyName = demenageur.company_name;
+  
+  return (
+    <TouchableOpacity 
+      style={styles.demenageurItem}
+      onPress={() => onSelect(demenageur)}
+    >
+      <View style={styles.demenageurInfo}>
+        <View style={styles.demenageurHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.demenageurName}>
+              {fullName}
+            </Text>
+            {companyName && companyName.trim() && (
+              <Text style={styles.companyName}>
+                {companyName}
+              </Text>
+            )}
+          </View>
+          <Text style={styles.distanceText}>
+            {demenageur.distance ? `${demenageur.distance.toFixed(1)} ${t('km')}` : ''}
+          </Text>
+        </View>
+        <View style={styles.demenageurDetails}>
+          <View style={styles.ratingContainer}>
+            <Ionicons name="star" size={14} color="#FFD700" />
+            <Text style={styles.ratingText}>
+              {t('rating', { rating: demenageur.rating || 0 })}
+            </Text>
+            <Text style={styles.reviewsText}>
+              ({t('reviews', { count: demenageur.total_reviews || 0 })})
+            </Text>
+          </View>
+          <Text style={styles.experienceText}>
+            {t('years_experience', { years: demenageur.experience_years || 0 })}
+          </Text>
+        </View>
+        {demenageur.is_verified && (
+          <View style={styles.verifiedBadge}>
+            <Ionicons name="checkmark-circle" size={12} color="#28a745" />
+            <Text style={styles.verifiedText}>{t('verified')}</Text>
+          </View>
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+};
+
 const AccueilScreen = ({ authToken }) => {
   const { t } = useLocale();
   const [location, setLocation] = useState(null);
@@ -208,7 +260,7 @@ const AccueilScreen = ({ authToken }) => {
 
   const loadDemenageurs = async () => {
     try {
-      console.log(`Tentative de connexion à: ${API_BASE_URL}/api/demenageurs`);
+      console.log(`🌐 Tentative de connexion à: ${API_BASE_URL}/api/demenageurs`);
       
       const response = await fetch(`${API_BASE_URL}/api/demenageurs`, {
         method: 'GET',
@@ -218,29 +270,73 @@ const AccueilScreen = ({ authToken }) => {
         },
       });
       
+      console.log(`📥 Réponse reçue: ${response.status} ${response.statusText}`);
+      
       if (response && response.ok) {
         const data = await response.json();
+        console.log(`📋 Données reçues:`, {
+          success: data.success,
+          count: data.count,
+          dataLength: data.data?.length
+        });
         
         if (data.success && data.data && data.data.length > 0) {
-          setDemenageurs(data.data);
+          // Filtrer les déménageurs qui ont des coordonnées valides
+          const demenageursWithCoords = data.data.filter(d => {
+            const hasLat = d.latitude || d.location?.lat;
+            const hasLng = d.longitude || d.location?.lng;
+            const isValid = hasLat && hasLng && !isNaN(parseFloat(hasLat)) && !isNaN(parseFloat(hasLng));
+            if (!isValid) {
+              console.log(`⚠️ Déménageur ${d.id} sans coordonnées valides:`, {
+                latitude: d.latitude,
+                longitude: d.longitude,
+                location: d.location
+              });
+            }
+            return isValid;
+          });
           
-          if (location && location.coords) {
-            const sorted = sortDemenageursByDistance(
-              data.data, 
-              location.coords.latitude, 
-              location.coords.longitude
-            );
-            setSortedDemenageurs(sorted);
+          console.log(`✅ Déménageurs avec coordonnées valides: ${demenageursWithCoords.length}/${data.data.length}`);
+          
+          if (demenageursWithCoords.length > 0) {
+            setDemenageurs(demenageursWithCoords);
+            
+            if (location && location.coords) {
+              const sorted = sortDemenageursByDistance(
+                demenageursWithCoords, 
+                location.coords.latitude, 
+                location.coords.longitude
+              );
+              console.log(`📊 Déménageurs triés par distance:`, sorted.map(d => ({
+                name: `${d.first_name || ''} ${d.last_name || ''}`.trim(),
+                company: d.company_name,
+                distance: d.distance?.toFixed(2)
+              })));
+              setSortedDemenageurs(sorted);
+            } else {
+              setSortedDemenageurs(demenageursWithCoords);
+            }
+          } else {
+            console.warn('⚠️ Aucun déménageur avec coordonnées valides trouvé');
+            setDemenageurs([]);
+            setSortedDemenageurs([]);
           }
         } else {
-          throw new Error('Réponse API invalide ou vide');
+          console.warn('⚠️ Réponse API vide ou invalide:', data);
+          setDemenageurs([]);
+          setSortedDemenageurs([]);
         }
       } else {
+        const errorText = await response.text();
+        console.error(`❌ Erreur HTTP ${response.status}:`, errorText);
         throw new Error(`Erreur HTTP: ${response.status} ${response.statusText}`);
       }
     } catch (error) {
-      console.error('Erreur de connexion API:', error.message);
+      console.error('❌ Erreur de connexion API:', error);
+      console.error('❌ Détails:', error.message);
       setErrorMsg(`Impossible de charger les déménageurs: ${error.message}`);
+      setDemenageurs([]);
+      setSortedDemenageurs([]);
     }
   };
 
@@ -252,7 +348,7 @@ const AccueilScreen = ({ authToken }) => {
         if (selectedDemenageur) {
           Alert.alert(
             'Déménageur sélectionné',
-            `Vous avez choisi ${selectedDemenageur.company_name || selectedDemenageur.first_name + ' ' + selectedDemenageur.last_name}`,
+            `Vous avez choisi ${selectedDemenageur.first_name || ''} ${selectedDemenageur.last_name || ''}`.trim() || 'Déménageur',
             [
               { text: 'Annuler', style: 'cancel' },
               { text: 'Continuer', onPress: () => {
@@ -267,6 +363,7 @@ const AccueilScreen = ({ authToken }) => {
     }
   };
 
+  // Vérifications et rendu conditionnel
   if (errorMsg) {
     return (
       <View style={styles.screen}>
@@ -285,43 +382,6 @@ const AccueilScreen = ({ authToken }) => {
   }
 
   const mapHTML = generateMapHTML(location.coords.latitude, location.coords.longitude, demenageurs);
-
-  const DemenageurItem = ({ demenageur }) => (
-    <TouchableOpacity 
-      style={styles.demenageurItem}
-      onPress={() => {
-        setSelectedDemenageur(demenageur);
-        setShowReservationForm(true);
-      }}
-    >
-      <View style={styles.demenageurInfo}>
-        <View style={styles.demenageurHeader}>
-          <Text style={styles.demenageurName}>
-            {demenageur.company_name || `${demenageur.first_name} ${demenageur.last_name}`}
-          </Text>
-          <Text style={styles.distanceText}>
-            {demenageur.distance ? `${demenageur.distance.toFixed(1)} ${t('km')}` : ''}
-          </Text>
-        </View>
-        <View style={styles.demenageurDetails}>
-          <View style={styles.ratingContainer}>
-            <Ionicons name="star" size={14} color="#FFD700" />
-            <Text style={styles.ratingText}>{t('rating', { rating: demenageur.rating })}</Text>
-            <Text style={styles.reviewsText}>({t('reviews', { count: demenageur.total_reviews })})</Text>
-          </View>
-          <Text style={styles.experienceText}>
-            {t('years_experience', { years: demenageur.experience_years })}
-          </Text>
-        </View>
-        {demenageur.is_verified && (
-          <View style={styles.verifiedBadge}>
-            <Ionicons name="checkmark-circle" size={12} color="#28a745" />
-            <Text style={styles.verifiedText}>{t('verified')}</Text>
-          </View>
-        )}
-      </View>
-    </TouchableOpacity>
-  );
 
   if (showReservationForm && selectedDemenageur) {
     return (
@@ -389,7 +449,13 @@ const AccueilScreen = ({ authToken }) => {
             {sortedDemenageurs.map((demenageur) => (
               <DemenageurItem 
                 key={demenageur.id} 
-                demenageur={demenageur} 
+                demenageur={demenageur}
+                onSelect={(d) => {
+                  setSelectedDemenageur(d);
+                  setShowReservationForm(true);
+                }}
+                t={t}
+                styles={styles}
               />
             ))}
           </ScrollView>
@@ -510,6 +576,12 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#ffffff',
     flex: 1,
+  },
+  companyName: {
+    fontSize: 12,
+    color: '#8e8e93',
+    fontStyle: 'italic',
+    marginTop: 2,
   },
   distanceText: {
     fontSize: 14,

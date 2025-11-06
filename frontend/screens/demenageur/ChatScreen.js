@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import useRealtimeChat from '../../hooks/useRealtimeChat';
+import { getAPIBaseURL } from '../../config/api';
 
 const { width } = Dimensions.get('window');
 
@@ -28,7 +29,7 @@ const ChatScreen = ({ userData }) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(50)).current;
 
-  const API_BASE_URL = Platform.OS === 'android' ? 'http://192.168.1.13:3000' : 'http://192.168.1.13:3000';
+  const API_BASE_URL = getAPIBaseURL();
 
   // Hook pour le chat en temps réel
   const { 
@@ -95,7 +96,8 @@ const ChatScreen = ({ userData }) => {
     
     setChats(prevChats => {
       const updatedChats = prevChats.map(chat => {
-        const chatMessages = normalMessages.filter(msg => msg.chatId === chat._id);
+        const chatId = chat.id || chat._id;
+        const chatMessages = normalMessages.filter(msg => msg.chatId === chatId);
         
         if (chatMessages.length > 0) {
           const latestMessage = chatMessages[chatMessages.length - 1];
@@ -176,7 +178,8 @@ const ChatScreen = ({ userData }) => {
     if (!newMessage.trim() || !selectedChat) return;
 
     if (isConnected) {
-      sendRealtimeMessage(selectedChat._id, newMessage.trim());
+      const chatId = selectedChat.id || selectedChat._id;
+      sendRealtimeMessage(chatId, newMessage.trim());
       setNewMessage('');
       
       setTimeout(() => {
@@ -184,7 +187,8 @@ const ChatScreen = ({ userData }) => {
       }, 100);
     } else {
       try {
-        const response = await fetch(`${API_BASE_URL}/api/chat/${selectedChat._id}/messages`, {
+        const chatId = selectedChat.id || selectedChat._id;
+        const response = await fetch(`${API_BASE_URL}/api/chat/${chatId}/messages`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${userData.token}`,
@@ -211,15 +215,18 @@ const ChatScreen = ({ userData }) => {
   };
 
   const selectChat = (chat) => {
+    const chatId = chat.id || chat._id;
+    
     if (selectedChat) {
-      leaveChat(selectedChat._id);
+      const selectedChatId = selectedChat.id || selectedChat._id;
+      leaveChat(selectedChatId);
     }
     
     setSelectedChat(chat);
-    loadMessages(chat._id);
+    loadMessages(chatId);
     
     if (isConnected) {
-      joinChat(chat._id);
+      joinChat(chatId);
     }
   };
 
@@ -229,28 +236,40 @@ const ChatScreen = ({ userData }) => {
   };
 
   const formatTime = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleTimeString('fr-FR', { 
-      hour: '2-digit', 
-      minute: '2-digit' 
-    });
+    if (!dateString) return '';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return '';
+      return date.toLocaleTimeString('fr-FR', { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      });
+    } catch (error) {
+      return '';
+    }
   };
 
   const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
+    if (!dateString) return '';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return '';
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
 
-    if (date.toDateString() === today.toDateString()) {
-      return 'Aujourd\'hui';
-    } else if (date.toDateString() === yesterday.toDateString()) {
-      return 'Hier';
-    } else {
-      return date.toLocaleDateString('fr-FR', { 
-        day: '2-digit', 
-        month: '2-digit' 
-      });
+      if (date.toDateString() === today.toDateString()) {
+        return 'Aujourd\'hui';
+      } else if (date.toDateString() === yesterday.toDateString()) {
+        return 'Hier';
+      } else {
+        return date.toLocaleDateString('fr-FR', { 
+          day: '2-digit', 
+          month: '2-digit' 
+        });
+      }
+    } catch (error) {
+      return '';
     }
   };
 
@@ -282,9 +301,9 @@ const ChatScreen = ({ userData }) => {
             
             <View style={styles.conversationInfo}>
               <View style={styles.avatarContainer}>
-                <View style={[styles.avatar, { backgroundColor: getAvatarColor(selectedChat.clientId.first_name) }]}>
+                <View style={[styles.avatar, { backgroundColor: getAvatarColor(selectedChat.clientId?.firstName || selectedChat.clientId?.first_name || 'C') }]}>
                   <Text style={styles.avatarText}>
-                    {selectedChat.clientId.first_name.charAt(0)}
+                    {(selectedChat.clientId?.firstName || selectedChat.clientId?.first_name || 'C').charAt(0)}
                   </Text>
                 </View>
                 <View style={styles.onlineIndicator} />
@@ -292,7 +311,7 @@ const ChatScreen = ({ userData }) => {
               
               <View style={styles.conversationDetails}>
                 <Text style={styles.conversationName}>
-                  {selectedChat.clientId.first_name} {selectedChat.clientId.last_name}
+                  {selectedChat.clientId?.firstName || selectedChat.clientId?.first_name || 'Client'} {selectedChat.clientId?.lastName || selectedChat.clientId?.last_name || ''}
                 </Text>
                 <View style={styles.statusContainer}>
                   <Ionicons 
@@ -324,7 +343,7 @@ const ChatScreen = ({ userData }) => {
         >
           {messages.map((message, index) => (
             <Animated.View 
-              key={message._id} 
+              key={message.id || message._id || `msg-${index}`} 
               style={[
                 styles.messageContainer,
                 message.senderType === 'demenageur' ? styles.messageRight : styles.messageLeft
@@ -423,13 +442,15 @@ const ChatScreen = ({ userData }) => {
           ) : (
             chats.map((chat, index) => {
               // Vérification de la structure des données
-              if (!chat.clientId || !chat.clientId.first_name) {
+              const clientFirstName = chat.clientId?.firstName || chat.clientId?.first_name;
+              if (!chat.clientId || !clientFirstName) {
+                console.log('⚠️ Chat sans clientId valide:', chat);
                 return null;
               }
               
               return (
                 <Animated.View
-                  key={chat._id || `chat-${index}`}
+                  key={chat.id || chat._id || `chat-${index}`}
                   style={[
                     styles.conversationItem,
                     chat.unreadByDemenageur > 0 && styles.conversationItemUnread,
@@ -442,9 +463,9 @@ const ChatScreen = ({ userData }) => {
                     activeOpacity={0.7}
                   >
                     <View style={styles.avatarContainer}>
-                      <View style={[styles.avatar, { backgroundColor: getAvatarColor(chat.clientId.first_name) }]}>
+                      <View style={[styles.avatar, { backgroundColor: getAvatarColor(clientFirstName) }]}>
                         <Text style={styles.avatarText}>
-                          {chat.clientId.first_name.charAt(0).toUpperCase()}
+                          {clientFirstName.charAt(0).toUpperCase()}
                         </Text>
                       </View>
                       {chat.unreadByDemenageur > 0 && (
@@ -458,7 +479,7 @@ const ChatScreen = ({ userData }) => {
                           styles.conversationName,
                           chat.unreadByDemenageur > 0 && styles.conversationNameUnread
                         ]}>
-                          {chat.clientId.first_name} {chat.clientId.last_name || ''}
+                          {clientFirstName} {chat.clientId?.lastName || chat.clientId?.last_name || ''}
                         </Text>
                         <Text style={styles.conversationTime}>
                           {chat.lastMessage ? formatDate(chat.lastMessage.createdAt) : formatDate(chat.createdAt)}

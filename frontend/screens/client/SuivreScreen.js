@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import useWebSocket from '../../hooks/useWebSocket';
+import { getAPIBaseURL } from '../../config/api';
 
 const SuivreScreen = ({ userData, navigation }) => {
   const [serviceRequests, setServiceRequests] = useState([]);
@@ -85,11 +86,18 @@ const SuivreScreen = ({ userData, navigation }) => {
       if (showLoading) {
         setLoading(true);
       }
-      const API_BASE_URL = 'http://192.168.1.13:3000';
+      
+      // Utiliser la configuration API centralisée
+      const API_BASE_URL = getAPIBaseURL();
+      console.log('🌐 Chargement des demandes depuis:', `${API_BASE_URL}/api/service-requests/client`);
 
       const token = userData?.token;
       if (!token) {
+        console.error('❌ Token d\'authentification manquant');
         Alert.alert('Erreur', 'Token d\'authentification manquant');
+        if (showLoading) {
+          setLoading(false);
+        }
         return;
       }
 
@@ -101,16 +109,49 @@ const SuivreScreen = ({ userData, navigation }) => {
         },
       });
 
+      console.log('📥 Réponse reçue:', response.status, response.statusText);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ Erreur HTTP:', response.status, errorText);
+        throw new Error(`Erreur HTTP: ${response.status}`);
+      }
+
       const result = await response.json();
+      console.log('📋 Résultat:', result);
 
       if (result.success) {
-        setServiceRequests(result.serviceRequests);
+        // Transformer les données pour correspondre au format attendu par le frontend
+        const transformedRequests = result.serviceRequests.map(req => ({
+          _id: req.id,
+          serviceType: req.service_type,
+          departureAddress: req.departure_address,
+          destinationAddress: req.destination_address,
+          scheduledDate: req.scheduled_date,
+          proposedPrice: req.proposed_price,
+          status: req.status,
+          createdAt: req.created_at,
+          demenageurId: {
+            _id: req.demenageur_id,
+            first_name: req.demenageur_first_name,
+            last_name: req.demenageur_last_name,
+            email: req.demenageur_email,
+            phone: req.demenageur_phone
+          },
+          priceNegotiation: req.price_negotiation ? (typeof req.price_negotiation === 'string' ? JSON.parse(req.price_negotiation) : req.price_negotiation) : null,
+          serviceDetails: req.service_details ? (typeof req.service_details === 'string' ? JSON.parse(req.service_details) : req.service_details) : null
+        }));
+        
+        console.log('✅ Demandes chargées:', transformedRequests.length);
+        setServiceRequests(transformedRequests);
       } else {
+        console.error('❌ Erreur dans la réponse:', result.message);
         Alert.alert('Erreur', result.message || 'Erreur lors du chargement des demandes');
       }
     } catch (error) {
-      console.error('Erreur de chargement des demandes:', error);
-      Alert.alert('Erreur', 'Erreur de connexion au serveur');
+      console.error('❌ Erreur de chargement des demandes:', error);
+      console.error('❌ Détails:', error.message);
+      Alert.alert('Erreur', `Erreur de connexion au serveur: ${error.message}`);
     } finally {
       if (showLoading) {
         setLoading(false);
@@ -126,7 +167,7 @@ const SuivreScreen = ({ userData, navigation }) => {
 
   const handleAcceptPrice = async (requestId) => {
     try {
-      const API_BASE_URL = 'http://192.168.1.13:3000';
+      const API_BASE_URL = getAPIBaseURL();
       const token = userData?.token;
 
       const response = await fetch(`${API_BASE_URL}/api/service-requests/${requestId}/accept-price`, {
@@ -174,7 +215,7 @@ const SuivreScreen = ({ userData, navigation }) => {
     }
 
     try {
-      const API_BASE_URL = 'http://192.168.1.13:3000';
+      const API_BASE_URL = getAPIBaseURL();
       const token = userData?.token;
 
       const response = await fetch(`${API_BASE_URL}/api/service-requests/${selectedRequestId}/negotiate-price`, {

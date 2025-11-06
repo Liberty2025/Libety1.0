@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import useWebSocket from '../../hooks/useWebSocket';
+import { getAPIBaseURL } from '../../config/api';
 
 const ProfilScreen = ({ userData, onLogout }) => {
   const [userProfile, setUserProfile] = useState(null);
@@ -60,7 +61,7 @@ const ProfilScreen = ({ userData, onLogout }) => {
       setLoading(true);
       console.log('loadUserProfile called with userData:', userData);
       
-      const API_BASE_URL = 'http://192.168.1.13:3000';
+      const API_BASE_URL = getAPIBaseURL();
 
       const token = userData?.token;
       console.log('Token:', token);
@@ -118,7 +119,7 @@ const ProfilScreen = ({ userData, onLogout }) => {
         setLoading(true);
       }
 
-      const API_BASE_URL = 'http://192.168.1.13:3000';
+      const API_BASE_URL = getAPIBaseURL();
       const token = userData?.token;
 
       if (!token) {

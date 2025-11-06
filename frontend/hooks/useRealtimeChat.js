@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 import io from 'socket.io-client';
+import { getAPIBaseURL } from '../config/api';
 
 const useRealtimeChat = (authToken, userId) => {
   const [socket, setSocket] = useState(null);
@@ -8,7 +9,8 @@ const useRealtimeChat = (authToken, userId) => {
   const [newMessages, setNewMessages] = useState([]);
   const socketRef = useRef(null);
 
-  const API_BASE_URL = Platform.OS === 'android' ? 'http://192.168.1.13:3000' : 'http://192.168.1.13:3000';
+  // Utiliser la configuration API centralisée
+  const API_BASE_URL = getAPIBaseURL();
 
   useEffect(() => {
     if (!authToken || !userId) {
@@ -47,6 +49,12 @@ const useRealtimeChat = (authToken, userId) => {
 
     newSocket.on('connect_error', (error) => {
       console.error('❌ Erreur de connexion WebSocket chat:', error);
+      console.error('❌ Détails de l\'erreur:', {
+        message: error.message,
+        type: error.type,
+        description: error.description,
+        context: error.context
+      });
       setIsConnected(false);
     });
 

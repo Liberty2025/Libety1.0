@@ -29,19 +29,23 @@ const usePersistentNotification = (userData) => {
           // Prendre la première demande non vue
           const newRequest = result.requests.find(req => !req.viewedByDemenageur);
           
-          if (newRequest && (!notification || notification._id !== newRequest._id)) {
+          // Utiliser id (PostgreSQL) au lieu de _id (MongoDB)
+          const requestId = newRequest.id || newRequest._id;
+          
+          if (newRequest && (!notification || (notification.id || notification._id) !== requestId)) {
             console.log('🔔 Nouvelle demande de service détectée:', newRequest);
             
             const notificationData = {
-              _id: newRequest._id,
+              id: requestId,
+              _id: requestId, // Pour compatibilité
               serviceType: newRequest.serviceType,
-              clientName: `${newRequest.clientId?.firstName || 'Client'} ${newRequest.clientId?.lastName || ''}`,
+              clientName: `${newRequest.clientId?.firstName || newRequest.clientId?.first_name || 'Client'} ${newRequest.clientId?.lastName || newRequest.clientId?.last_name || ''}`,
               departureAddress: newRequest.departureAddress,
               destinationAddress: newRequest.destinationAddress,
               estimatedPrice: newRequest.estimatedPrice || 'Non spécifié',
               createdAt: newRequest.createdAt,
               clientId: newRequest.clientId,
-              serviceRequestId: newRequest._id,
+              serviceRequestId: requestId,
               // Ajouter toutes les données complètes
               serviceDetails: newRequest.serviceDetails,
               scheduledDate: newRequest.scheduledDate,
@@ -57,7 +61,11 @@ const usePersistentNotification = (userData) => {
             setIsVisible(true);
             
             // Marquer comme vue par le déménageur
-            markRequestAsViewed(newRequest._id);
+            if (requestId) {
+              markRequestAsViewed(requestId);
+            } else {
+              console.error('❌ ID de demande manquant:', newRequest);
+            }
           }
         }
       }
