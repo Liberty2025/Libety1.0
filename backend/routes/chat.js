@@ -32,15 +32,15 @@ router.post('/create-from-service-request', async (req, res) => {
   try {
     const { serviceRequestId } = req.body;
 
-    // Vérifier que la demande de service existe et est acceptée
+    // Vérifier que la demande de service existe et est acceptée (utiliser quotes)
     const serviceRequest = await queryOne(
-      `SELECT sr.*, 
+      `SELECT q.*, 
               c.id as client_id, c.first_name as client_first_name, c.last_name as client_last_name,
-              d.id as demenageur_id, d.first_name as demenageur_first_name, d.last_name as demenageur_last_name
-       FROM service_requests sr
-       JOIN users c ON sr.client_id = c.id
-       JOIN users d ON sr.demenageur_id = d.id
-       WHERE sr.id = $1`,
+              d.id as mover_id, d.first_name as mover_first_name, d.last_name as mover_last_name
+       FROM quotes q
+       JOIN users c ON q.client_id = c.id
+       LEFT JOIN users d ON q.mover_id = d.id
+       WHERE q.id = $1`,
       [serviceRequestId]
     );
 
@@ -58,41 +58,49 @@ router.post('/create-from-service-request', async (req, res) => {
       });
     }
 
-    // Vérifier qu'un chat n'existe pas déjà
+    // Vérifier qu'une conversation n'existe pas déjà
     const existingChat = await queryOne(
-      'SELECT * FROM chats WHERE service_request_id = $1',
-      [serviceRequestId]
+      'SELECT * FROM conversations WHERE client_id = $1 AND mover_id = $2',
+      [serviceRequest.client_id, serviceRequest.mover_id]
     );
     if (existingChat) {
       return res.status(200).json({
         success: true,
-        message: 'Chat déjà existant',
+        message: 'Conversation déjà existante',
         chat: existingChat
       });
     }
 
-    // Créer le chat
+    // Créer la conversation
     const chatResult = await query(
-      `INSERT INTO chats (id, service_request_id, client_id, demenageur_id, status, created_at, updated_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), NOW())
+      `INSERT INTO conversations (id, client_id, mover_id, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, NOW(), NOW())
        RETURNING *`,
-      [serviceRequestId, serviceRequest.client_id, serviceRequest.demenageur_id, 'active']
+      [serviceRequest.client_id, serviceRequest.mover_id]
     );
     const chat = chatResult.rows[0];
 
+    // Extraire serviceType depuis services
+    let services = serviceRequest.services;
+    if (typeof services === 'string') {
+      try {
+        services = JSON.parse(services);
+      } catch (e) {
+        services = {};
+      }
+    }
+    const serviceType = services.serviceType || 'demenagement';
+
     // Créer un message système de bienvenue
     const welcomeMessageResult = await query(
-      `INSERT INTO chat_messages (id, chat_id, service_request_id, sender_id, sender_type, content, message_type, status, created_at, updated_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+      `INSERT INTO messages (id, sender_id, recipient_id, content, conversation_id, created_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW())
        RETURNING *`,
       [
-        chat.id,
-        serviceRequestId,
-        serviceRequest.demenageur_id,
-        'demenageur',
-        `Bonjour ${serviceRequest.client_first_name} ! Votre demande de ${serviceRequest.service_type} a été acceptée. Nous pouvons maintenant discuter des détails.`,
-        'system',
-        'sent'
+        serviceRequest.mover_id,
+        serviceRequest.client_id,
+        `Bonjour ${serviceRequest.client_first_name} ! Votre demande de ${serviceType} a été acceptée. Nous pouvons maintenant discuter des détails.`,
+        chat.id
       ]
     );
 
@@ -103,12 +111,12 @@ router.post('/create-from-service-request', async (req, res) => {
       io.to(`user_${serviceRequest.client_id}`).emit('chat_created', {
         chatId: chat.id,
         serviceRequestId,
-        demenageurName: `${serviceRequest.demenageur_first_name} ${serviceRequest.demenageur_last_name}`,
+        demenageurName: `${serviceRequest.mover_first_name} ${serviceRequest.mover_last_name}`,
         message: welcomeMessageResult.rows[0].content
       });
 
       // Notifier le déménageur
-      io.to(`user_${serviceRequest.demenageur_id}`).emit('chat_created', {
+      io.to(`user_${serviceRequest.mover_id}`).emit('chat_created', {
         chatId: chat.id,
         serviceRequestId,
         clientName: `${serviceRequest.client_first_name} ${serviceRequest.client_last_name}`,
@@ -116,14 +124,20 @@ router.post('/create-from-service-request', async (req, res) => {
       });
     }
 
-    // Récupérer le chat avec les informations des utilisateurs
+    // Mettre à jour last_message_id dans la conversation
+    await query(
+      'UPDATE conversations SET last_message_id = $1 WHERE id = $2',
+      [welcomeMessageResult.rows[0].id, chat.id]
+    );
+
+    // Récupérer la conversation avec les informations des utilisateurs
     const chatWithUsers = await queryOne(
       `SELECT c.*, 
               cl.first_name as client_first_name, cl.last_name as client_last_name,
-              d.first_name as demenageur_first_name, d.last_name as demenageur_last_name
-       FROM chats c
+              d.first_name as mover_first_name, d.last_name as mover_last_name
+       FROM conversations c
        JOIN users cl ON c.client_id = cl.id
-       JOIN users d ON c.demenageur_id = d.id
+       JOIN users d ON c.mover_id = d.id
        WHERE c.id = $1`,
       [chat.id]
     );
@@ -162,14 +176,14 @@ router.get('/my-chats', authenticateToken, async (req, res) => {
         `SELECT c.*, 
                 cl.first_name as client_first_name, cl.last_name as client_last_name,
                 cl.email as client_email, cl.phone as client_phone,
-                d.first_name as demenageur_first_name, d.last_name as demenageur_last_name,
-                sr.service_type, sr.departure_address, sr.destination_address, sr.status as service_status
-         FROM chats c
+                d.first_name as mover_first_name, d.last_name as mover_last_name,
+                q.services as quote_services, q.from_address as quote_from_address
+         FROM conversations c
          JOIN users cl ON c.client_id = cl.id
-         JOIN users d ON c.demenageur_id = d.id
-         JOIN service_requests sr ON c.service_request_id = sr.id
+         JOIN users d ON c.mover_id = d.id
+         LEFT JOIN quotes q ON q.client_id = c.client_id AND q.mover_id = c.mover_id
          WHERE c.client_id = $1
-         ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC`,
+         ORDER BY c.updated_at DESC, c.created_at DESC`,
         [userId]
       );
     } else {
@@ -177,14 +191,14 @@ router.get('/my-chats', authenticateToken, async (req, res) => {
         `SELECT c.*, 
                 cl.first_name as client_first_name, cl.last_name as client_last_name,
                 cl.email as client_email, cl.phone as client_phone,
-                d.first_name as demenageur_first_name, d.last_name as demenageur_last_name,
-                sr.service_type, sr.departure_address, sr.destination_address, sr.status as service_status
-         FROM chats c
+                d.first_name as mover_first_name, d.last_name as mover_last_name,
+                q.services as quote_services, q.from_address as quote_from_address
+         FROM conversations c
          JOIN users cl ON c.client_id = cl.id
-         JOIN users d ON c.demenageur_id = d.id
-         JOIN service_requests sr ON c.service_request_id = sr.id
-         WHERE c.demenageur_id = $1
-         ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC`,
+         JOIN users d ON c.mover_id = d.id
+         LEFT JOIN quotes q ON q.client_id = c.client_id AND q.mover_id = c.mover_id
+         WHERE c.mover_id = $1
+         ORDER BY c.updated_at DESC, c.created_at DESC`,
         [userId]
       );
     }
@@ -193,26 +207,42 @@ router.get('/my-chats', authenticateToken, async (req, res) => {
     const chatsWithLastMessage = await Promise.all(
       chats.map(async (chat) => {
         const lastMessage = await queryOne(
-          `SELECT cm.*, u.first_name, u.last_name
-           FROM chat_messages cm
-           JOIN users u ON cm.sender_id = u.id
-           WHERE cm.chat_id = $1
-           ORDER BY cm.created_at DESC
+          `SELECT m.*, u.first_name, u.last_name
+           FROM messages m
+           JOIN users u ON m.sender_id = u.id
+           WHERE m.conversation_id = $1
+           ORDER BY m.created_at DESC
            LIMIT 1`,
           [chat.id]
         );
+
+        // Compter les messages non lus
+        const unreadCount = await queryOne(
+          `SELECT COUNT(*) as count
+           FROM messages m
+           WHERE m.conversation_id = $1 
+             AND m.recipient_id = $2 
+             AND m.read_at IS NULL`,
+          [chat.id, userId]
+        );
+
+        // Extraire serviceType depuis quote_services (JSONB)
+        let serviceType = null;
+        if (chat.quote_services) {
+          try {
+            const services = typeof chat.quote_services === 'string' 
+              ? JSON.parse(chat.quote_services) 
+              : chat.quote_services;
+            serviceType = services.serviceType || null;
+          } catch (e) {
+            console.error('Erreur parsing quote_services:', e);
+          }
+        }
 
         // Transformer en camelCase pour le frontend
         return {
           id: chat.id,
           _id: chat.id, // Pour compatibilité MongoDB
-          serviceRequestId: {
-            id: chat.service_request_id,
-            serviceType: chat.service_type,
-            departureAddress: chat.departure_address,
-            destinationAddress: chat.destination_address,
-            status: chat.service_status
-          },
           clientId: {
             id: chat.client_id,
             firstName: chat.client_first_name,
@@ -223,27 +253,28 @@ router.get('/my-chats', authenticateToken, async (req, res) => {
             phone: chat.client_phone || null
           },
           demenageurId: {
-            id: chat.demenageur_id,
-            firstName: chat.demenageur_first_name,
-            lastName: chat.demenageur_last_name,
-            first_name: chat.demenageur_first_name, // Pour compatibilité
-            last_name: chat.demenageur_last_name // Pour compatibilité
+            id: chat.mover_id,
+            firstName: chat.mover_first_name,
+            lastName: chat.mover_last_name,
+            first_name: chat.mover_first_name, // Pour compatibilité
+            last_name: chat.mover_last_name // Pour compatibilité
           },
-          status: chat.status,
-          unreadByDemenageur: chat.unread_by_demenageur || 0,
-          unreadByClient: chat.unread_by_client || 0,
+          serviceRequestId: {
+            serviceType: serviceType,
+            departureAddress: chat.quote_from_address || null
+          },
+          unreadCount: parseInt(unreadCount?.count || 0),
           createdAt: chat.created_at,
           updatedAt: chat.updated_at,
-          lastMessageAt: chat.last_message_at,
           lastMessage: lastMessage ? {
             id: lastMessage.id,
             _id: lastMessage.id, // Pour compatibilité
             content: lastMessage.content,
             senderName: `${lastMessage.first_name} ${lastMessage.last_name}`,
-            senderType: lastMessage.sender_type,
-            messageType: lastMessage.message_type,
+            senderId: lastMessage.sender_id,
+            recipientId: lastMessage.recipient_id,
             createdAt: lastMessage.created_at,
-            updatedAt: lastMessage.updated_at
+            readAt: lastMessage.read_at
           } : null
         };
       })
@@ -269,42 +300,42 @@ router.get('/:chatId/messages', authenticateToken, async (req, res) => {
     const { chatId } = req.params;
     const userId = req.user.userId;
 
-    // Vérifier que l'utilisateur a accès à ce chat
+    // Vérifier que l'utilisateur a accès à cette conversation
     const chat = await queryOne(
-      'SELECT * FROM chats WHERE id = $1',
+      'SELECT * FROM conversations WHERE id = $1',
       [chatId]
     );
     if (!chat) {
       return res.status(404).json({
         success: false,
-        message: 'Chat non trouvé'
+        message: 'Conversation non trouvée'
       });
     }
 
-    if (chat.client_id !== userId && chat.demenageur_id !== userId) {
+    if (chat.client_id !== userId && chat.mover_id !== userId) {
       return res.status(403).json({
         success: false,
-        message: 'Accès non autorisé à ce chat'
+        message: 'Accès non autorisé à cette conversation'
       });
     }
 
-    // Récupérer les messages
+    // Récupérer les messages avec le rôle de l'expéditeur
     const messages = await queryMany(
-      `SELECT cm.*, u.first_name, u.last_name
-       FROM chat_messages cm
-       JOIN users u ON cm.sender_id = u.id
-       WHERE cm.chat_id = $1
-       ORDER BY cm.created_at ASC`,
+      `SELECT m.*, u.first_name, u.last_name, u.role as sender_role
+       FROM messages m
+       JOIN users u ON m.sender_id = u.id
+       WHERE m.conversation_id = $1
+       ORDER BY m.created_at ASC`,
       [chatId]
     );
 
-    // Marquer les messages comme lus
-    const userRole = req.user.role;
-    if (userRole === 'client') {
-      await query('UPDATE chats SET unread_by_client = 0 WHERE id = $1', [chatId]);
-    } else if (userRole === 'demenageur') {
-      await query('UPDATE chats SET unread_by_demenageur = 0 WHERE id = $1', [chatId]);
-    }
+    // Marquer les messages comme lus (où l'utilisateur actuel est le destinataire)
+    await query(
+      `UPDATE messages 
+       SET read_at = NOW() 
+       WHERE conversation_id = $1 AND recipient_id = $2 AND read_at IS NULL`,
+      [chatId, userId]
+    );
 
     res.status(200).json({
       success: true,
@@ -312,12 +343,12 @@ router.get('/:chatId/messages', authenticateToken, async (req, res) => {
         id: msg.id,
         _id: msg.id, // Pour compatibilité MongoDB
         content: msg.content,
-        senderType: msg.sender_type,
+        senderId: msg.sender_id,
+        recipientId: msg.recipient_id,
         senderName: `${msg.first_name} ${msg.last_name}`,
-        messageType: msg.message_type,
+        senderType: msg.sender_role || 'client', // Ajouter senderType basé sur le rôle
         createdAt: msg.created_at,
-        updatedAt: msg.updated_at,
-        status: msg.status
+        readAt: msg.read_at
       }))
     });
 
@@ -334,76 +365,71 @@ router.get('/:chatId/messages', authenticateToken, async (req, res) => {
 router.post('/:chatId/messages', authenticateToken, async (req, res) => {
   try {
     const { chatId } = req.params;
-    const { content, messageType = 'text' } = req.body;
+    const { content } = req.body;
     const userId = req.user.userId;
     const userRole = req.user.role;
 
-    // Vérifier que l'utilisateur a accès à ce chat
+    // Vérifier que l'utilisateur a accès à cette conversation
     const chat = await queryOne(
-      'SELECT * FROM chats WHERE id = $1',
+      'SELECT * FROM conversations WHERE id = $1',
       [chatId]
     );
     if (!chat) {
       return res.status(404).json({
         success: false,
-        message: 'Chat non trouvé'
+        message: 'Conversation non trouvée'
       });
     }
 
-    if (chat.client_id !== userId && chat.demenageur_id !== userId) {
+    if (chat.client_id !== userId && chat.mover_id !== userId) {
       return res.status(403).json({
         success: false,
-        message: 'Accès non autorisé à ce chat'
+        message: 'Accès non autorisé à cette conversation'
       });
     }
+
+    // Déterminer le destinataire
+    const recipientId = userRole === 'client' ? chat.mover_id : chat.client_id;
 
     // Créer le message
     const messageResult = await query(
-      `INSERT INTO chat_messages (id, chat_id, service_request_id, sender_id, sender_type, content, message_type, status, created_at, updated_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+      `INSERT INTO messages (id, sender_id, recipient_id, content, conversation_id, created_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW())
        RETURNING *`,
-      [chatId, chat.service_request_id, userId, userRole, content, messageType, 'sent']
+      [userId, recipientId, content, chatId]
     );
     const message = messageResult.rows[0];
 
-    // Mettre à jour le chat
-    if (userRole === 'client') {
-      await query(
-        `UPDATE chats 
-         SET last_message_at = NOW(), unread_by_demenageur = unread_by_demenageur + 1
-         WHERE id = $1`,
-        [chatId]
-      );
-    } else {
-      await query(
-        `UPDATE chats 
-         SET last_message_at = NOW(), unread_by_client = unread_by_client + 1
-         WHERE id = $1`,
-        [chatId]
-      );
-    }
+    // Mettre à jour la conversation
+    await query(
+      `UPDATE conversations 
+       SET last_message_id = $1, updated_at = NOW()
+       WHERE id = $2`,
+      [message.id, chatId]
+    );
 
-    // Récupérer les informations de l'expéditeur
+    // Récupérer les informations de l'expéditeur avec son rôle
     const sender = await queryOne(
-      'SELECT first_name, last_name FROM users WHERE id = $1',
+      'SELECT first_name, last_name, role FROM users WHERE id = $1',
       [userId]
     );
 
     // Émettre l'événement WebSocket
     const io = req.app.get('io');
     if (io) {
-      const targetUserId = userRole === 'client' ? chat.demenageur_id : chat.client_id;
+      const targetUserId = userRole === 'client' ? chat.mover_id : chat.client_id;
       
       io.to(`user_${targetUserId}`).emit('new_message', {
         chatId,
         message: {
           id: message.id,
           content: message.content,
-          senderType: message.sender_type,
+          senderId: message.sender_id,
+          recipientId: message.recipient_id,
           senderName: sender ? `${sender.first_name} ${sender.last_name}` : 'Unknown',
-          messageType: message.message_type,
+          senderType: sender ? sender.role : userRole, // Ajouter senderType
           createdAt: message.created_at,
-          status: message.status
+          readAt: message.read_at
         }
       });
 
@@ -413,11 +439,12 @@ router.post('/:chatId/messages', authenticateToken, async (req, res) => {
         message: {
           id: message.id,
           content: message.content,
-          senderType: message.sender_type,
+          senderId: message.sender_id,
+          recipientId: message.recipient_id,
           senderName: sender ? `${sender.first_name} ${sender.last_name}` : 'Unknown',
-          messageType: message.message_type,
+          senderType: sender ? sender.role : userRole, // Ajouter senderType
           createdAt: message.created_at,
-          status: 'delivered'
+          readAt: message.read_at
         }
       });
     }
@@ -428,11 +455,12 @@ router.post('/:chatId/messages', authenticateToken, async (req, res) => {
       data: {
         id: message.id,
         content: message.content,
-        senderType: message.sender_type,
+        senderId: message.sender_id,
+        recipientId: message.recipient_id,
         senderName: sender ? `${sender.first_name} ${sender.last_name}` : 'Unknown',
-        messageType: message.message_type,
+        senderType: sender ? sender.role : userRole, // Ajouter senderType
         createdAt: message.created_at,
-        status: message.status
+        readAt: message.read_at
       }
     });
 
@@ -453,41 +481,30 @@ router.put('/:chatId/mark-read', authenticateToken, async (req, res) => {
     const userRole = req.user.role;
 
     const chat = await queryOne(
-      'SELECT * FROM chats WHERE id = $1',
+      'SELECT * FROM conversations WHERE id = $1',
       [chatId]
     );
     if (!chat) {
       return res.status(404).json({
         success: false,
-        message: 'Chat non trouvé'
+        message: 'Conversation non trouvée'
       });
     }
 
-    if (chat.client_id !== userId && chat.demenageur_id !== userId) {
+    if (chat.client_id !== userId && chat.mover_id !== userId) {
       return res.status(403).json({
         success: false,
-        message: 'Accès non autorisé à ce chat'
+        message: 'Accès non autorisé à cette conversation'
       });
     }
 
     // Marquer les messages comme lus
-    if (userRole === 'client') {
-      await query('UPDATE chats SET unread_by_client = 0 WHERE id = $1', [chatId]);
-      await query(
-        `UPDATE chat_messages 
-         SET status = 'read', read_at = NOW() 
-         WHERE chat_id = $1 AND sender_type = 'demenageur' AND status = 'sent'`,
-        [chatId]
-      );
-    } else if (userRole === 'demenageur') {
-      await query('UPDATE chats SET unread_by_demenageur = 0 WHERE id = $1', [chatId]);
-      await query(
-        `UPDATE chat_messages 
-         SET status = 'read', read_at = NOW() 
-         WHERE chat_id = $1 AND sender_type = 'client' AND status = 'sent'`,
-        [chatId]
-      );
-    }
+    await query(
+      `UPDATE messages 
+       SET read_at = NOW() 
+       WHERE conversation_id = $1 AND recipient_id = $2 AND read_at IS NULL`,
+      [chatId, userId]
+    );
 
     res.status(200).json({
       success: true,

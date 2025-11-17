@@ -109,9 +109,9 @@ router.post('/register', upload.fields([
       });
     }
 
-    // Vérifier si le numéro de carte d'identité existe déjà
+    // Vérifier si le numéro de carte d'identité existe déjà dans mover_profiles
     const existingIdentityCard = await queryOne(
-      'SELECT id FROM users WHERE identity_card_number = $1',
+      'SELECT user_id FROM mover_profiles WHERE cin_number = $1',
       [identityCardNumber]
     );
     if (existingIdentityCard) {
@@ -152,14 +152,35 @@ router.post('/register', upload.fields([
       }
     };
 
-    // Créer le nouvel utilisateur déménageur
+    // Créer le nouvel utilisateur déménageur avec les photos dans users (carte_grise, carte_cin, permis)
     const newUserResult = await query(
-      `INSERT INTO users (id, first_name, last_name, email, phone, identity_card_number, password, role, status, documents, is_verified, created_at, updated_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
-       RETURNING id, first_name, last_name, email, phone, identity_card_number, role, status, is_verified, created_at`,
-      [firstName, lastName, email.toLowerCase(), phone, identityCardNumber, hashedPassword, 'demenageur', 'pending_verification', JSON.stringify(documents), false]
+      `INSERT INTO users (id, first_name, last_name, email, phone, password, role, status, carte_grise, carte_cin, permis, is_verified, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+       RETURNING id, first_name, last_name, email, phone, role, status, carte_grise, carte_cin, permis, is_verified, created_at`,
+      [
+        firstName, 
+        lastName, 
+        email.toLowerCase(), 
+        phone, 
+        hashedPassword, 
+        'demenageur', 
+        'inactive', 
+        JSON.stringify(documents.vehicleRegistration), // carte_grise
+        JSON.stringify(documents.identityCard), // carte_cin
+        JSON.stringify(documents.drivingLicense), // permis
+        false
+      ]
     );
     const newUser = newUserResult.rows[0];
+
+    // Créer le profil déménageur avec le cin_number
+    const moverProfileResult = await query(
+      `INSERT INTO mover_profiles (user_id, cin_number, created_at, updated_at)
+       VALUES ($1, $2, NOW(), NOW())
+       RETURNING user_id, cin_number`,
+      [newUser.id, identityCardNumber]
+    );
+    const moverProfile = moverProfileResult.rows[0];
 
     // Générer un token JWT
     const token = jwt.sign(
@@ -179,7 +200,10 @@ router.post('/register', upload.fields([
       lastName: newUser.last_name,
       email: newUser.email,
       phone: newUser.phone,
-      identityCardNumber: newUser.identity_card_number,
+      identityCardNumber: moverProfile.cin_number,
+      carteGrise: newUser.carte_grise ? (typeof newUser.carte_grise === 'string' ? JSON.parse(newUser.carte_grise) : newUser.carte_grise) : null,
+      carteCin: newUser.carte_cin ? (typeof newUser.carte_cin === 'string' ? JSON.parse(newUser.carte_cin) : newUser.carte_cin) : null,
+      permis: newUser.permis ? (typeof newUser.permis === 'string' ? JSON.parse(newUser.permis) : newUser.permis) : null,
       role: newUser.role,
       status: newUser.status,
       isVerified: newUser.is_verified,
@@ -269,6 +293,15 @@ router.post('/login', async (req, res) => {
       });
     }
 
+    // Vérifier si le compte est en attente de vérification (inactive et non vérifié)
+    if (user.status === 'inactive' && !user.is_verified) {
+      return res.status(403).json({
+        success: false,
+        message: 'Votre compte est en attente de vérification. Veuillez patienter.'
+      });
+    }
+
+    // Vérifier si le compte est simplement inactif (mais vérifié)
     if (user.status === 'inactive') {
       return res.status(403).json({
         success: false,
@@ -276,12 +309,11 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    if (user.status === 'pending_verification') {
-      return res.status(403).json({
-        success: false,
-        message: 'Votre compte est en attente de vérification. Veuillez patienter.'
-      });
-    }
+    // Récupérer le profil déménageur pour obtenir le cin_number
+    const moverProfile = await queryOne(
+      'SELECT cin_number FROM mover_profiles WHERE user_id = $1',
+      [user.id]
+    );
 
     // Générer un token JWT
     const token = jwt.sign(
@@ -294,6 +326,11 @@ router.post('/login', async (req, res) => {
       { expiresIn: '7d' }
     );
 
+    // Parser les photos depuis users
+    const carteGrise = user.carte_grise ? (typeof user.carte_grise === 'string' ? JSON.parse(user.carte_grise) : user.carte_grise) : null;
+    const carteCin = user.carte_cin ? (typeof user.carte_cin === 'string' ? JSON.parse(user.carte_cin) : user.carte_cin) : null;
+    const permis = user.permis ? (typeof user.permis === 'string' ? JSON.parse(user.permis) : user.permis) : null;
+
     // Retourner la réponse (sans le mot de passe)
     const userResponse = {
       id: user.id,
@@ -302,10 +339,13 @@ router.post('/login', async (req, res) => {
       lastName: user.last_name,
       email: user.email,
       phone: user.phone,
-      identityCardNumber: user.identity_card_number,
+      identityCardNumber: moverProfile ? moverProfile.cin_number : null,
       role: user.role,
       status: user.status,
       isVerified: user.is_verified,
+      carteGrise: carteGrise,
+      carteCin: carteCin,
+      permis: permis,
       createdAt: user.created_at
     };
 
@@ -330,7 +370,7 @@ router.post('/login', async (req, res) => {
 router.get('/profile', authenticateToken, async (req, res) => {
   try {
     const user = await queryOne(
-      `SELECT id, first_name, last_name, email, phone, identity_card_number, role, status, is_verified, documents, address, created_at, updated_at
+      `SELECT id, first_name, last_name, email, phone, role, status, is_verified, carte_grise, carte_cin, permis, address, created_at, updated_at
        FROM users WHERE id = $1`,
       [req.user.userId]
     );
@@ -349,15 +389,22 @@ router.get('/profile', authenticateToken, async (req, res) => {
       });
     }
 
+    // Récupérer le profil déménageur pour obtenir le cin_number
+    const moverProfile = await queryOne(
+      'SELECT cin_number FROM mover_profiles WHERE user_id = $1',
+      [user.id]
+    );
+
     // Récupérer la localisation si elle existe
     const location = await queryOne(
       'SELECT * FROM user_locations WHERE user_id = $1',
       [user.id]
     );
 
-    const documents = user.documents 
-      ? (typeof user.documents === 'string' ? JSON.parse(user.documents) : user.documents)
-      : {};
+    // Parser les photos depuis users
+    const carteGrise = user.carte_grise ? (typeof user.carte_grise === 'string' ? JSON.parse(user.carte_grise) : user.carte_grise) : null;
+    const carteCin = user.carte_cin ? (typeof user.carte_cin === 'string' ? JSON.parse(user.carte_cin) : user.carte_cin) : null;
+    const permis = user.permis ? (typeof user.permis === 'string' ? JSON.parse(user.permis) : user.permis) : null;
 
     const userResponse = {
       id: user.id,
@@ -365,11 +412,13 @@ router.get('/profile', authenticateToken, async (req, res) => {
       lastName: user.last_name,
       email: user.email,
       phone: user.phone,
-      identityCardNumber: user.identity_card_number,
+      identityCardNumber: moverProfile ? moverProfile.cin_number : null,
       role: user.role,
       status: user.status,
       isVerified: user.is_verified,
-      documents: documents,
+      carteGrise: carteGrise,
+      carteCin: carteCin,
+      permis: permis,
       address: user.address,
       latitude: location ? parseFloat(location.lat) : null,
       longitude: location ? parseFloat(location.lng) : null,
@@ -432,7 +481,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
     const finalParamIndex = paramIndex;
 
     const user = await queryOne(
-      `SELECT id, first_name, last_name, email, phone, identity_card_number, role, status, is_verified, documents, address, created_at, updated_at
+      `SELECT id, first_name, last_name, email, phone, role, status, is_verified, carte_grise, carte_cin, permis, address, created_at, updated_at
        FROM users WHERE id = $1`,
       [userId]
     );
@@ -458,8 +507,14 @@ router.put('/profile', authenticateToken, async (req, res) => {
 
     // Récupérer l'utilisateur mis à jour
     const updatedUser = await queryOne(
-      `SELECT id, first_name, last_name, email, phone, identity_card_number, role, status, is_verified, documents, address, created_at, updated_at
+      `SELECT id, first_name, last_name, email, phone, role, status, is_verified, carte_grise, carte_cin, permis, address, created_at, updated_at
        FROM users WHERE id = $1`,
+      [userId]
+    );
+
+    // Récupérer le profil déménageur pour obtenir le cin_number
+    const moverProfile = await queryOne(
+      'SELECT cin_number FROM mover_profiles WHERE user_id = $1',
       [userId]
     );
 
@@ -469,9 +524,10 @@ router.put('/profile', authenticateToken, async (req, res) => {
       [userId]
     );
 
-    const documents = updatedUser.documents 
-      ? (typeof updatedUser.documents === 'string' ? JSON.parse(updatedUser.documents) : updatedUser.documents)
-      : {};
+    // Parser les photos depuis users
+    const carteGrise = updatedUser.carte_grise ? (typeof updatedUser.carte_grise === 'string' ? JSON.parse(updatedUser.carte_grise) : updatedUser.carte_grise) : null;
+    const carteCin = updatedUser.carte_cin ? (typeof updatedUser.carte_cin === 'string' ? JSON.parse(updatedUser.carte_cin) : updatedUser.carte_cin) : null;
+    const permis = updatedUser.permis ? (typeof updatedUser.permis === 'string' ? JSON.parse(updatedUser.permis) : updatedUser.permis) : null;
 
     const userResponse = {
       id: updatedUser.id,
@@ -479,11 +535,13 @@ router.put('/profile', authenticateToken, async (req, res) => {
       lastName: updatedUser.last_name,
       email: updatedUser.email,
       phone: updatedUser.phone,
-      identityCardNumber: updatedUser.identity_card_number,
+      identityCardNumber: moverProfile ? moverProfile.cin_number : null,
       role: updatedUser.role,
       status: updatedUser.status,
       isVerified: updatedUser.is_verified,
-      documents: documents,
+      carteGrise: carteGrise,
+      carteCin: carteCin,
+      permis: permis,
       address: updatedUser.address,
       latitude: location ? parseFloat(location.lat) : null,
       longitude: location ? parseFloat(location.lng) : null,

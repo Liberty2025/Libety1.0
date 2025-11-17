@@ -312,3 +312,6 @@ const styles = StyleSheet.create({
 
 export default ClientPriceNotification;
 
+
+
+

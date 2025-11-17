@@ -12,6 +12,7 @@ import MissionDetailsScreen from './MissionDetailsScreen';
 import ChatScreen from './ChatScreen';
 import AbonnementScreen from './AbonnementScreen';
 import ProfilScreen from './ProfilScreen';
+import NotificationsScreen from './NotificationsScreen';
 
 // Import des composants de notification
 import NotificationAlert from '../../components/NotificationAlert';
@@ -71,10 +72,10 @@ const DemenageurNavigator = ({ userData, onLogout }) => {
     tokenLength: userData?.token?.length || 0
   });
   
-  const { notifications, isConnected, connectionStatus, removeNotification } = useNotificationSocket(
-    userData?.token, 
-    userData?.userId
-  );
+  const { notifications, isConnected, connectionStatus, removeNotification, clearAllNotifications, refreshNotifications, isLoadingNotifications } = useNotificationSocket(
+     userData?.token, 
+     userData?.userId
+   );
 
   // Utiliser le hook de notification persistante
   const {
@@ -99,11 +100,15 @@ const DemenageurNavigator = ({ userData, onLogout }) => {
     setStackNavigation(navigation);
   };
 
-  // Afficher la première notification disponible
+  // Afficher la première notification non lue disponible
   React.useEffect(() => {
     if (notifications.length > 0 && !showNotification) {
-      setCurrentNotification(notifications[0]);
-      setShowNotification(true);
+      // Chercher la première notification non lue
+      const unreadNotification = notifications.find(n => !n.isRead);
+      if (unreadNotification) {
+        setCurrentNotification(unreadNotification);
+        setShowNotification(true);
+      }
     }
   }, [notifications, showNotification]);
 
@@ -154,10 +159,12 @@ const DemenageurNavigator = ({ userData, onLogout }) => {
 
   const handleCloseNotification = () => {
     if (currentNotification) {
-      removeNotification(currentNotification.id);
+      // Marquer comme lue mais ne pas supprimer de la liste
+      removeNotification(currentNotification);
     }
     setShowNotification(false);
-    setCurrentNotification(null);
+    // Ne pas réinitialiser currentNotification pour qu'elle reste dans la liste
+    // setCurrentNotification(null);
   };
 
   // Gérer la vue de la demande persistante
@@ -356,9 +363,15 @@ const DemenageurNavigator = ({ userData, onLogout }) => {
     console.log('🔍 Notification ID:', notification.id);
     console.log('🔍 Client:', notification.clientName);
     
-    // Fermer la notification
+    // Marquer la notification comme lue mais ne pas la supprimer
+    if (notification) {
+      removeNotification(notification);
+    }
+    
+    // Fermer l'alerte de notification mais garder la notification dans la liste
     setShowNotification(false);
-    setCurrentNotification(null);
+    // Ne pas réinitialiser currentNotification pour qu'elle reste dans la liste
+    // setCurrentNotification(null);
     
     // Naviguer vers l'onglet Missions puis vers les détails
     if (navigationRef) {
@@ -480,6 +493,8 @@ const DemenageurNavigator = ({ userData, onLogout }) => {
             iconName = focused ? 'briefcase' : 'briefcase-outline';
           } else if (route.name === 'Chat') {
             iconName = focused ? 'chatbubbles' : 'chatbubbles-outline';
+          } else if (route.name === 'Notifications') {
+            iconName = focused ? 'notifications' : 'notifications-outline';
           } else if (route.name === 'Abonnement') {
             iconName = focused ? 'card' : 'card-outline';
           } else if (route.name === 'Profil') {
@@ -533,6 +548,23 @@ const DemenageurNavigator = ({ userData, onLogout }) => {
         }}
       >
         {() => <ChatScreen userData={userData} />}
+      </Tab.Screen>
+      <Tab.Screen
+        name="Notifications"
+        options={{
+          title: 'Notifications',
+        }}
+      >
+        {() => (
+          <NotificationsScreen
+            notifications={notifications}
+            onRemove={removeNotification}
+            onClearAll={clearAllNotifications}
+            onRefresh={refreshNotifications}
+            isRefreshing={isLoadingNotifications}
+            connectionStatus={connectionStatus}
+          />
+        )}
       </Tab.Screen>
       <Tab.Screen 
         name="Abonnement" 

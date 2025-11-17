@@ -4,6 +4,7 @@ const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
 require('dotenv').config();
+const { createNotification } = require('./utils/notificationService');
 
 const app = express();
 const server = http.createServer(app);
@@ -52,6 +53,7 @@ const demenageurRoutes = require('./routes/demenageurs');
 const serviceRequestRoutes = require('./routes/serviceRequests');
 const chatRoutes = require('./routes/chat');
 const statisticsRoutes = require('./routes/statistics');
+const notificationRoutes = require('./routes/notifications');
 
 // Routes de base
 app.get('/', (req, res) => {
@@ -99,6 +101,7 @@ app.use('/api/demenageurs', demenageurRoutes);
 app.use('/api/service-requests', serviceRequestRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/statistics', statisticsRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Gestion des connexions WebSocket
 io.on('connection', (socket) => {
@@ -182,67 +185,113 @@ io.on('connection', (socket) => {
 
       console.log('📤 Message reçu via WebSocket:', { chatId, content, userId, userRole });
 
-      // Vérifier que l'utilisateur a accès à ce chat
+      // Vérifier que l'utilisateur a accès à cette conversation
       const { queryOne, query } = require('./utils/dbHelpers');
       const chat = await queryOne(
-        'SELECT * FROM chats WHERE id = $1',
+        'SELECT * FROM conversations WHERE id = $1',
         [chatId]
       );
       
       if (!chat) {
-        console.log('❌ Chat non trouvé:', chatId);
+        console.log('❌ Conversation non trouvée:', chatId);
         return;
       }
 
-      if (chat.client_id !== userId && chat.demenageur_id !== userId) {
-        console.log('❌ Accès non autorisé au chat:', chatId);
+      if (chat.client_id !== userId && chat.mover_id !== userId) {
+        console.log('❌ Accès non autorisé à la conversation:', chatId);
         return;
       }
+
+      // Déterminer le destinataire
+      const recipientId = userRole === 'client' ? chat.mover_id : chat.client_id;
 
       // Créer le message
       const messageResult = await query(
-        `INSERT INTO chat_messages (id, chat_id, service_request_id, sender_id, sender_type, content, message_type, status, created_at, updated_at)
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+        `INSERT INTO messages (id, sender_id, recipient_id, content, conversation_id, created_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW())
          RETURNING *`,
-        [chatId, chat.service_request_id, userId, userRole, content, messageType, 'sent']
+        [userId, recipientId, content, chatId]
       );
       const message = messageResult.rows[0];
 
-      // Mettre à jour le chat
-      if (userRole === 'client') {
-        await query(
-          `UPDATE chats 
-           SET last_message_at = NOW(), unread_by_demenageur = unread_by_demenageur + 1
-           WHERE id = $1`,
-          [chatId]
-        );
-      } else {
-        await query(
-          `UPDATE chats 
-           SET last_message_at = NOW(), unread_by_client = unread_by_client + 1
-           WHERE id = $1`,
-          [chatId]
-        );
-      }
-
-      // Récupérer les informations de l'expéditeur
-      const sender = await queryOne(
-        'SELECT first_name, last_name FROM users WHERE id = $1',
-        [userId]
+      // Mettre à jour la conversation
+      await query(
+        `UPDATE conversations 
+         SET last_message_id = $1, updated_at = NOW()
+         WHERE id = $2`,
+        [message.id, chatId]
       );
 
-      // Émettre le message à tous les participants du chat
+      // Récupérer les informations de l'expéditeur avec son rôle
+      const sender = await queryOne(
+        'SELECT first_name, last_name, role FROM users WHERE id = $1',
+        [userId]
+      );
+      const senderName = sender ? `${sender.first_name} ${sender.last_name}`.trim() : 'Unknown';
+      const senderTypeValue = sender ? sender.role : userRole;
+
+      let notificationRecordForClient = null;
+      let notificationRecordForDemenageur = null;
+
+      if (userRole === 'demenageur') {
+        try {
+          notificationRecordForClient = await createNotification({
+            userId: chat.client_id,
+            title: 'Nouveau message',
+            message: content,
+            type: 'chat_message',
+            data: {
+              chatId,
+              messageId: message.id,
+              senderType: userRole,
+              senderId: userId,
+              senderName,
+            },
+            io: io, // Passer l'instance Socket.IO pour l'envoi en temps réel
+          });
+        } catch (notificationError) {
+          console.error('❌ Erreur création notification chat_message client:', notificationError);
+        }
+      }
+
+      if (userRole === 'client') {
+        try {
+          notificationRecordForDemenageur = await createNotification({
+            userId: chat.mover_id,
+            title: 'Message du client',
+            message: content,
+            type: 'chat_message',
+            data: {
+              chatId,
+              messageId: message.id,
+              senderType: userRole,
+              senderId: userId,
+              senderName,
+            },
+            io: io, // Passer l'instance Socket.IO pour l'envoi en temps réel
+          });
+        } catch (notificationError) {
+          console.error('❌ Erreur création notification chat_message déménageur:', notificationError);
+        }
+      }
+ 
+      // Émettre le message à tous les participants de la conversation
       io.to(`chat_${chatId}`).emit('new_message', {
         chatId,
         message: {
           id: message.id,
           content: message.content,
-          senderType: message.sender_type,
-          senderName: sender ? `${sender.first_name} ${sender.last_name}` : 'Unknown',
-          messageType: message.message_type,
+          senderId: message.sender_id,
+          recipientId: message.recipient_id,
+          senderName,
+          senderType: senderTypeValue, // Ajouter senderType
           createdAt: message.created_at,
-          status: message.status
-        }
+          readAt: message.read_at
+        },
+        notificationId:
+          userRole === 'demenageur'
+            ? notificationRecordForClient ? notificationRecordForClient.id : null
+            : notificationRecordForDemenageur ? notificationRecordForDemenageur.id : null,
       });
 
       console.log('✅ Message diffusé dans le chat:', chatId);
@@ -262,47 +311,30 @@ io.on('connection', (socket) => {
 
       const { queryOne, query } = require('./utils/dbHelpers');
       const chat = await queryOne(
-        'SELECT * FROM chats WHERE id = $1',
+        'SELECT * FROM conversations WHERE id = $1',
         [chatId]
       );
       
       if (!chat) {
-        console.log('❌ Chat non trouvé:', chatId);
+        console.log('❌ Conversation non trouvée:', chatId);
         return;
       }
 
-      if (chat.client_id !== userId && chat.demenageur_id !== userId) {
-        console.log('❌ Accès non autorisé au chat:', chatId);
+      if (chat.client_id !== userId && chat.mover_id !== userId) {
+        console.log('❌ Accès non autorisé à la conversation:', chatId);
         return;
       }
 
-      // Marquer les messages comme lus
-      if (userRole === 'client') {
-        await query(
-          `UPDATE chats SET unread_by_client = 0 WHERE id = $1`,
-          [chatId]
-        );
-        await query(
-          `UPDATE chat_messages 
-           SET status = 'read', read_at = NOW() 
-           WHERE chat_id = $1 AND sender_type = 'demenageur' AND status = 'sent'`,
-          [chatId]
-        );
-      } else if (userRole === 'demenageur') {
-        await query(
-          `UPDATE chats SET unread_by_demenageur = 0 WHERE id = $1`,
-          [chatId]
-        );
-        await query(
-          `UPDATE chat_messages 
-           SET status = 'read', read_at = NOW() 
-           WHERE chat_id = $1 AND sender_type = 'client' AND status = 'sent'`,
-          [chatId]
-        );
-      }
+      // Marquer les messages comme lus (où l'utilisateur actuel est le destinataire)
+      await query(
+        `UPDATE messages 
+         SET read_at = NOW() 
+         WHERE conversation_id = $1 AND recipient_id = $2 AND read_at IS NULL`,
+        [chatId, userId]
+      );
 
       // Notifier l'autre utilisateur que les messages ont été lus
-      const targetUserId = userRole === 'client' ? chat.demenageur_id : chat.client_id;
+      const targetUserId = userRole === 'client' ? chat.mover_id : chat.client_id;
       io.to(`user_${targetUserId}`).emit('messages_read', {
         chatId,
         readBy: userId
@@ -327,11 +359,35 @@ io.on('connection', (socket) => {
 // Rendre io accessible aux routes
 app.set('io', io);
 
+// Fonction pour obtenir l'adresse IP locale
+function getLocalIPAddress() {
+  const os = require('os');
+  const networkInterfaces = os.networkInterfaces();
+  
+  for (const interfaceName of Object.keys(networkInterfaces)) {
+    const interfaces = networkInterfaces[interfaceName];
+    for (const iface of interfaces) {
+      // Ignorer les adresses internes et non IPv4
+      if (iface.family === 'IPv4' && !iface.internal) {
+        // Ignorer les adresses VirtualBox (192.168.56.x)
+        if (!iface.address.startsWith('192.168.56.')) {
+          return iface.address;
+        }
+      }
+    }
+  }
+  return 'localhost'; // Fallback
+}
+
 // Démarrage du serveur
 server.listen(PORT, '0.0.0.0', () => {
+  const localIP = getLocalIPAddress();
   console.log(`🚀 Serveur démarré sur le port ${PORT}`);
   console.log(`📱 API disponible sur: http://localhost:${PORT}`);
-  console.log(`🌐 API accessible depuis le réseau sur: http://192.168.1.13:${PORT}`);
+  console.log(`🌐 API accessible depuis le réseau sur: http://${localIP}:${PORT}`);
   console.log(`🔌 WebSocket disponible sur: ws://localhost:${PORT}`);
+  console.log(`🔌 WebSocket accessible depuis le réseau sur: ws://${localIP}:${PORT}`);
+  console.log(`\n💡 Pour vous connecter depuis votre appareil mobile:`);
+  console.log(`   Utilisez l'IP: http://${localIP}:${PORT}`);
 });
 

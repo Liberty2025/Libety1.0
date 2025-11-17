@@ -22,6 +22,9 @@ import CustomSplashScreen from './components/CustomSplashScreen';
 
 // Import du contexte de localisation
 import { LocaleProvider, useLocale } from './context/LocaleContext';
+// Import du contexte de tutoriel
+import { TutorialProvider } from './context/TutorialContext';
+import GlobalTutorial from './components/GlobalTutorial';
 
 const Tab = createBottomTabNavigator();
 
@@ -250,11 +253,14 @@ function AppContent() {
   );
 }
 
-// Composant principal qui enveloppe l'app avec le LocaleProvider
+// Composant principal qui enveloppe l'app avec les providers
 export default function App() {
   return (
     <LocaleProvider>
-      <AppContent />
+      <TutorialProvider>
+        <AppContent />
+        <GlobalTutorial />
+      </TutorialProvider>
     </LocaleProvider>
   );
 }

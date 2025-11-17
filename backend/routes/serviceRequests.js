@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { queryOne, queryMany, query } = require('../utils/dbHelpers');
+const { createNotification } = require('../utils/notificationService');
 const jwt = require('jsonwebtoken');
 
 // Middleware d'authentification
@@ -71,20 +72,68 @@ router.post('/create', authenticateToken, async (req, res) => {
       });
     }
 
-    // Créer la demande de service
+    // Créer la demande de service dans quotes
+    const servicesData = {
+      ...serviceDetails,
+      serviceType: serviceType
+    };
+    const priceCents = estimatedPrice ? Math.round(estimatedPrice * 100) : null;
+    
     const serviceRequestResult = await query(
-      `INSERT INTO service_requests (id, client_id, demenageur_id, service_type, departure_address, destination_address, service_details, proposed_price, scheduled_date, status, created_at, updated_at)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+      `INSERT INTO quotes (id, client_id, mover_id, from_address, to_address, services, price_cents, move_date, status, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
        RETURNING *`,
-      [clientId, demenageurId, serviceType, departureAddress, destinationAddress, JSON.stringify(serviceDetails), estimatedPrice, scheduledDate, 'pending']
+      [clientId, demenageurId, departureAddress, destinationAddress, JSON.stringify(servicesData), priceCents, scheduledDate, 'pending']
     );
     const serviceRequest = serviceRequestResult.rows[0];
 
+    let demenageurNotification = null;
+    const io = req.app.get('io'); // Obtenir l'instance Socket.IO
+    
+    // Vérifier si c'est un service rapide
+    const isQuickService = serviceDetails && serviceDetails.isQuickService === true;
+    const serviceTypeLabel = serviceType === 'demenagement' ? 'déménagement' : 'transport';
+    const quickServiceLabel = isQuickService ? ' (Service Rapide)' : '';
+    
+    try {
+      demenageurNotification = await createNotification({
+        userId: demenageurId,
+        title: isQuickService ? '⚡ Service Rapide' : 'Nouvelle demande de service',
+        message: `${client.first_name} ${client.last_name || ''} a créé une demande de ${serviceTypeLabel}${quickServiceLabel}.`,
+        type: 'new_service_request',
+        data: {
+          missionId: serviceRequest.id,
+          serviceType,
+          departureAddress,
+          destinationAddress,
+          estimatedPrice,
+          scheduledDate,
+          clientId,
+          demenageurId,
+          isQuickService: isQuickService,
+        },
+        io: io, // Passer l'instance Socket.IO pour l'envoi en temps réel
+      });
+    } catch (notificationError) {
+      console.error('❌ Erreur création notification new_service_request:', notificationError);
+    }
+
     // Émettre un événement WebSocket au déménageur
-    const io = req.app.get('io');
     if (io) {
+      const roomName = `user_${demenageurId}`;
       console.log('🔔 Émission notification WebSocket pour déménageur:', demenageurId);
-      io.to(`user_${demenageurId}`).emit('new_service_request', {
+      console.log('🔔 Room WebSocket:', roomName);
+      
+      // Vérifier les sockets dans la room (pour debug)
+      const room = io.sockets.adapter.rooms.get(roomName);
+      if (room) {
+        console.log(`✅ Room "${roomName}" existe avec ${room.size} socket(s) connecté(s)`);
+      } else {
+        console.log(`⚠️ Room "${roomName}" n'existe pas - le déménageur n'est peut-être pas connecté`);
+      }
+      
+      const notificationData = {
+        _id: serviceRequest.id, // Ajouter _id pour compatibilité
         id: serviceRequest.id,
         clientId: {
           id: client.id,
@@ -101,9 +150,15 @@ router.post('/create', authenticateToken, async (req, res) => {
         scheduledDate: scheduledDate,
         status: 'pending',
         createdAt: serviceRequest.created_at,
-        demenageurId: demenageurId
-      });
-      console.log('✅ Notification WebSocket émise');
+        demenageurId: demenageurId,
+        notificationId: demenageurNotification ? demenageurNotification.id : null,
+      };
+      
+      console.log('📤 Données WebSocket à émettre:', JSON.stringify(notificationData, null, 2));
+      io.to(roomName).emit('new_service_request', notificationData);
+      console.log('✅ Notification WebSocket émise vers room:', roomName);
+    } else {
+      console.log('❌ io n\'est pas disponible dans req.app');
     }
 
     res.status(201).json({
@@ -139,16 +194,82 @@ router.get('/client', authenticateToken, async (req, res) => {
       });
     }
 
-    const serviceRequests = await queryMany(
-      `SELECT sr.*, 
+    const serviceRequestsRaw = await queryMany(
+      `SELECT q.*, 
               d.id as demenageur_id, d.first_name as demenageur_first_name, d.last_name as demenageur_last_name, 
               d.email as demenageur_email, d.phone as demenageur_phone
-       FROM service_requests sr
-       JOIN users d ON sr.demenageur_id = d.id
-       WHERE sr.client_id = $1
-       ORDER BY sr.created_at DESC`,
+       FROM quotes q
+       LEFT JOIN users d ON q.mover_id = d.id
+       WHERE q.client_id = $1
+       ORDER BY q.created_at DESC`,
       [clientId]
     );
+
+    // Transformer les données en camelCase pour le frontend
+    const serviceRequests = serviceRequestsRaw.map(req => {
+      // Parser services si c'est une chaîne JSON
+      let serviceDetails = req.services;
+      if (typeof serviceDetails === 'string') {
+        try {
+          serviceDetails = JSON.parse(serviceDetails);
+        } catch (e) {
+          serviceDetails = {};
+        }
+      } else if (!serviceDetails) {
+        serviceDetails = {};
+      }
+
+      // Extraire serviceType depuis services si disponible
+      const serviceType = serviceDetails.serviceType || 'demenagement';
+
+      // Calculer le prix proposé
+      const proposedPrice = req.price_cents != null ? req.price_cents / 100 : null;
+      
+      // Debug log pour vérifier les prix
+      if (req.price_cents != null) {
+        console.log(`💰 Quote ${req.id}: price_cents=${req.price_cents}, proposedPrice=${proposedPrice}`);
+      }
+
+      return {
+        id: req.id,
+        _id: req.id, // Pour compatibilité avec MongoDB
+        serviceType: serviceType,
+        service_type: serviceType, // Pour compatibilité
+        departureAddress: req.from_address,
+        departure_address: req.from_address, // Pour compatibilité
+        from_address: req.from_address, // Pour compatibilité
+        destinationAddress: req.to_address,
+        destination_address: req.to_address, // Pour compatibilité
+        to_address: req.to_address, // Pour compatibilité
+        serviceDetails: serviceDetails,
+        service_details: serviceDetails, // Pour compatibilité
+        proposedPrice: proposedPrice,
+        proposed_price: proposedPrice, // Pour compatibilité avec l'ancien format
+        actualPrice: req.price_cents ? req.price_cents / 100 : null,
+        scheduledDate: req.move_date,
+        scheduled_date: req.move_date, // Pour compatibilité
+        move_date: req.move_date, // Pour compatibilité
+        status: req.status,
+        createdAt: req.created_at,
+        created_at: req.created_at, // Pour compatibilité
+        updatedAt: req.updated_at,
+        updated_at: req.updated_at, // Pour compatibilité
+        clientId: req.client_id,
+        client_id: req.client_id, // Pour compatibilité
+        demenageurId: req.mover_id ? {
+          id: req.mover_id,
+          _id: req.mover_id, // Pour compatibilité avec MongoDB
+          firstName: req.demenageur_first_name,
+          lastName: req.demenageur_last_name,
+          first_name: req.demenageur_first_name, // Pour compatibilité
+          last_name: req.demenageur_last_name, // Pour compatibilité
+          email: req.demenageur_email,
+          phone: req.demenageur_phone
+        } : null,
+        mover_id: req.mover_id, // Pour compatibilité
+        demenageur_id: req.mover_id // Pour compatibilité
+      };
+    });
 
     res.status(200).json({
       success: true,
@@ -184,13 +305,13 @@ router.post('/test-notification', authenticateToken, async (req, res) => {
 
     // Trouver une demande en attente
     const pendingRequest = await queryOne(
-      `SELECT sr.*, 
+      `SELECT q.*, 
               c.id as client_id, c.first_name as client_first_name, c.last_name as client_last_name, 
               c.email as client_email, c.phone as client_phone
-       FROM service_requests sr
-       JOIN users c ON sr.client_id = c.id
-       WHERE sr.demenageur_id = $1 AND sr.status = 'pending'
-       ORDER BY sr.created_at DESC
+       FROM quotes q
+       JOIN users c ON q.client_id = c.id
+       WHERE q.mover_id = $1 AND q.status = 'pending'
+       ORDER BY q.created_at DESC
        LIMIT 1`,
       [demenageurId]
     );
@@ -202,8 +323,31 @@ router.post('/test-notification', authenticateToken, async (req, res) => {
       });
     }
 
+    let testNotificationRecord = null;
+    const io = req.app.get('io'); // Obtenir l'instance Socket.IO
+    try {
+      testNotificationRecord = await createNotification({
+        userId: demenageurId,
+        title: 'Nouvelle demande de service',
+        message: `${pendingRequest.client_first_name} ${pendingRequest.client_last_name || ''} a une demande en attente.`,
+        type: 'new_service_request',
+        data: {
+          missionId: pendingRequest.id,
+          serviceType: (typeof pendingRequest.services === 'string' ? JSON.parse(pendingRequest.services) : pendingRequest.services || {}).serviceType || 'demenagement',
+          departureAddress: pendingRequest.from_address,
+          destinationAddress: pendingRequest.to_address,
+          estimatedPrice: pendingRequest.price_cents ? pendingRequest.price_cents / 100 : null,
+          scheduledDate: pendingRequest.move_date,
+          clientId: pendingRequest.client_id,
+          demenageurId,
+        },
+        io: io, // Passer l'instance Socket.IO pour l'envoi en temps réel
+      });
+    } catch (notificationError) {
+      console.error('❌ Erreur création notification test new_service_request:', notificationError);
+    }
+
     // Émettre l'événement WebSocket
-    const io = req.app.get('io');
     if (io) {
       console.log('🔔 Émission notification de test WebSocket');
       io.to(`user_${demenageurId}`).emit('new_service_request', {
@@ -215,15 +359,16 @@ router.post('/test-notification', authenticateToken, async (req, res) => {
           email: pendingRequest.client_email,
           phone: pendingRequest.client_phone
         },
-        serviceType: pendingRequest.service_type,
-        departureAddress: pendingRequest.departure_address,
-        destinationAddress: pendingRequest.destination_address,
-        serviceDetails: typeof pendingRequest.service_details === 'string' ? JSON.parse(pendingRequest.service_details) : pendingRequest.service_details,
-        estimatedPrice: pendingRequest.proposed_price,
-        scheduledDate: pendingRequest.scheduled_date,
+        serviceType: (typeof pendingRequest.services === 'string' ? JSON.parse(pendingRequest.services) : pendingRequest.services || {}).serviceType || 'demenagement',
+        departureAddress: pendingRequest.from_address,
+        destinationAddress: pendingRequest.to_address,
+        serviceDetails: typeof pendingRequest.services === 'string' ? JSON.parse(pendingRequest.services) : pendingRequest.services || {},
+        estimatedPrice: pendingRequest.price_cents ? pendingRequest.price_cents / 100 : null,
+        scheduledDate: pendingRequest.move_date,
         status: pendingRequest.status,
         createdAt: pendingRequest.created_at,
-        demenageurId: demenageurId
+        demenageurId: demenageurId,
+        notificationId: testNotificationRecord ? testNotificationRecord.id : null,
       });
       console.log('✅ Notification de test émise');
     }
@@ -263,13 +408,13 @@ router.get('/demenageur', authenticateToken, async (req, res) => {
     }
 
     const serviceRequestsRaw = await queryMany(
-      `SELECT sr.*, 
+      `SELECT q.*, 
               c.id as client_id, c.first_name as client_first_name, c.last_name as client_last_name, 
               c.email as client_email, c.phone as client_phone
-       FROM service_requests sr
-       JOIN users c ON sr.client_id = c.id
-       WHERE sr.demenageur_id = $1
-       ORDER BY sr.created_at DESC`,
+       FROM quotes q
+       JOIN users c ON q.client_id = c.id
+       WHERE q.mover_id = $1
+       ORDER BY q.created_at DESC`,
       [demenageurId]
     );
 
@@ -277,39 +422,34 @@ router.get('/demenageur', authenticateToken, async (req, res) => {
 
     // Transformer les données en camelCase pour le frontend
     const serviceRequests = serviceRequestsRaw.map(req => {
-      // Parser service_details si c'est une chaîne JSON
-      let serviceDetails = req.service_details;
+      // Parser services si c'est une chaîne JSON
+      let serviceDetails = req.services;
       if (typeof serviceDetails === 'string') {
         try {
           serviceDetails = JSON.parse(serviceDetails);
         } catch (e) {
           serviceDetails = {};
         }
+      } else if (!serviceDetails) {
+        serviceDetails = {};
       }
 
-      // Parser price_negotiation si c'est une chaîne JSON
-      let priceNegotiation = req.price_negotiation;
-      if (typeof priceNegotiation === 'string') {
-        try {
-          priceNegotiation = JSON.parse(priceNegotiation);
-        } catch (e) {
-          priceNegotiation = null;
-        }
-      }
+      // Extraire serviceType depuis services si disponible
+      const serviceType = serviceDetails.serviceType || 'demenagement';
 
       return {
         id: req.id,
         _id: req.id, // Pour compatibilité avec MongoDB
-        serviceType: req.service_type,
-        departureAddress: req.departure_address,
-        destinationAddress: req.destination_address,
+        serviceType: serviceType,
+        departureAddress: req.from_address,
+        destinationAddress: req.to_address,
         serviceDetails: serviceDetails,
-        proposedPrice: req.proposed_price,
-        actualPrice: req.actual_price,
-        scheduledDate: req.scheduled_date,
+        proposedPrice: req.price_cents ? req.price_cents / 100 : null,
+        actualPrice: req.price_cents ? req.price_cents / 100 : null,
+        scheduledDate: req.move_date,
         status: req.status,
-        viewedByDemenageur: req.viewed_by_demenageur,
-        priceNegotiation: priceNegotiation,
+        viewedByDemenageur: false, // Pas de champ dans quotes
+        priceNegotiation: null, // Pas de champ dans quotes
         createdAt: req.created_at,
         updatedAt: req.updated_at,
         clientId: {
@@ -321,7 +461,7 @@ router.get('/demenageur', authenticateToken, async (req, res) => {
           email: req.client_email,
           phone: req.client_phone
         },
-        demenageurId: req.demenageur_id
+        demenageurId: req.mover_id
       };
     });
 
@@ -347,7 +487,7 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
     const userId = req.user.userId;
 
     const serviceRequest = await queryOne(
-      'SELECT * FROM service_requests WHERE id = $1',
+      'SELECT * FROM quotes WHERE id = $1',
       [requestId]
     );
     if (!serviceRequest) {
@@ -358,7 +498,7 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
     }
 
     // Vérifier que l'utilisateur peut modifier cette demande
-    if (serviceRequest.demenageur_id !== userId) {
+    if (serviceRequest.mover_id !== userId) {
       return res.status(403).json({
         success: false,
         message: 'Accès non autorisé'
@@ -366,31 +506,71 @@ router.put('/:id/status', authenticateToken, async (req, res) => {
     }
 
     await query(
-      'UPDATE service_requests SET status = $1, updated_at = NOW() WHERE id = $2',
+      'UPDATE quotes SET status = $1, updated_at = NOW() WHERE id = $2',
       [status, requestId]
     );
 
     // Récupérer la demande mise à jour
     const updatedRequest = await queryOne(
-      'SELECT * FROM service_requests WHERE id = $1',
+      'SELECT * FROM quotes WHERE id = $1',
       [requestId]
     );
 
+    const demenageurFullName = `${req.user.firstName} ${req.user.lastName}`;
+
+    let statusMessage;
+    switch (status) {
+      case 'in_progress':
+        statusMessage = 'Camion en route vers vous. La mission est en cours.';
+        break;
+      case 'completed':
+        statusMessage = 'La mission est terminée. Merci pour votre confiance.';
+        break;
+      case 'accepted':
+        statusMessage = 'La mission a été acceptée et va démarrer prochainement.';
+        break;
+      case 'cancelled':
+        statusMessage = 'La mission a été annulée.';
+        break;
+      default:
+        statusMessage = `Le statut de la mission est maintenant ${status}.`;
+        break;
+    }
+
+    let statusNotification = null;
+    const io = req.app.get('io'); // Obtenir l'instance Socket.IO
+    try {
+      statusNotification = await createNotification({
+        userId: serviceRequest.client_id,
+        title: 'Statut de mission',
+        message: statusMessage,
+        type: 'status_updated',
+        data: {
+          missionId: serviceRequest.id,
+          newStatus: status,
+          demenageurName: demenageurFullName,
+        },
+        io: io, // Passer l'instance Socket.IO pour l'envoi en temps réel
+      });
+    } catch (notificationError) {
+      console.error('❌ Erreur lors de la création de la notification status_updated:', notificationError);
+    }
+
     // Émettre un événement WebSocket au client ET au déménageur
-    const io = req.app.get('io');
     if (io) {
       // Émettre vers le client
       io.to(`user_${serviceRequest.client_id}`).emit('status_updated', {
         missionId: serviceRequest.id,
         newStatus: status,
-        demenageurName: `${req.user.firstName} ${req.user.lastName}`
+        demenageurName: demenageurFullName,
+        notificationId: statusNotification ? statusNotification.id : null,
       });
       
       // Émettre vers le déménageur pour mettre à jour sa liste
-      io.to(`user_${serviceRequest.demenageur_id}`).emit('status_updated', {
+      io.to(`user_${serviceRequest.mover_id}`).emit('status_updated', {
         missionId: serviceRequest.id,
         newStatus: status,
-        demenageurName: `${req.user.firstName} ${req.user.lastName}`
+        demenageurName: demenageurFullName,
       });
     }
 
@@ -418,7 +598,7 @@ router.post('/:id/propose-price', authenticateToken, async (req, res) => {
 
     // Vérifier que la demande existe et appartient au déménageur
     const serviceRequest = await queryOne(
-      'SELECT * FROM service_requests WHERE id = $1 AND demenageur_id = $2 AND status = $3',
+      'SELECT * FROM quotes WHERE id = $1 AND mover_id = $2 AND status = $3',
       [id, demenageurId, 'pending']
     );
 
@@ -429,17 +609,14 @@ router.post('/:id/propose-price', authenticateToken, async (req, res) => {
       });
     }
 
-    // Mettre à jour avec le prix proposé
-    const priceNegotiation = {
-      demenageurPrice: proposedPrice,
-      status: 'pending'
-    };
+    // Mettre à jour avec le prix proposé (convertir en cents)
+    const priceCents = Math.round(proposedPrice * 100);
 
     await query(
-      `UPDATE service_requests 
-       SET proposed_price = $1, price_negotiation = $2, updated_at = NOW() 
-       WHERE id = $3`,
-      [proposedPrice, JSON.stringify(priceNegotiation), id]
+      `UPDATE quotes 
+       SET price_cents = $1, updated_at = NOW() 
+       WHERE id = $2`,
+      [priceCents, id]
     );
 
     // Récupérer les informations du déménageur pour l'événement
@@ -453,12 +630,32 @@ router.post('/:id/propose-price', authenticateToken, async (req, res) => {
 
     // Récupérer la demande mise à jour
     const updatedRequest = await queryOne(
-      'SELECT * FROM service_requests WHERE id = $1',
+      'SELECT * FROM quotes WHERE id = $1',
       [id]
     );
 
+    // Créer une notification persistante pour le client
+    let clientNotification = null;
+    const io = req.app.get('io'); // Obtenir l'instance Socket.IO
+    try {
+      clientNotification = await createNotification({
+        userId: serviceRequest.client_id,
+        title: 'Nouvelle proposition de prix',
+        message: `${demenageurName} propose ${proposedPrice} TND pour votre mission.`,
+        type: 'price_proposed',
+        data: {
+          missionId: serviceRequest.id,
+          proposedPrice: proposedPrice,
+          demenageurName,
+          demenageurId,
+        },
+        io: io, // Passer l'instance Socket.IO pour l'envoi en temps réel
+      });
+    } catch (notificationError) {
+      console.error('❌ Erreur lors de la création de la notification price_proposed:', notificationError);
+    }
+
     // Émettre un événement WebSocket au client ET au déménageur
-    const io = req.app.get('io');
     if (io) {
       const clientIdString = serviceRequest.client_id;
       const clientRoom = `user_${clientIdString}`;
@@ -469,13 +666,14 @@ router.post('/:id/propose-price', authenticateToken, async (req, res) => {
       io.to(clientRoom).emit('price_proposed', {
         missionId: serviceRequest.id,
         proposedPrice: proposedPrice,
-        demenageurName: demenageurName
+        demenageurName: demenageurName,
+        notificationId: clientNotification ? clientNotification.id : null,
       });
       
       console.log('✅ Événement price_proposed émis vers:', clientRoom);
       
       // Émettre vers le déménageur pour mettre à jour sa liste
-      io.to(`user_${serviceRequest.demenageur_id}`).emit('price_proposed', {
+      io.to(`user_${serviceRequest.mover_id}`).emit('price_proposed', {
         missionId: serviceRequest.id,
         proposedPrice: proposedPrice,
         demenageurName: `${req.user.firstName} ${req.user.lastName}`
@@ -505,7 +703,7 @@ router.post('/:id/accept-price', authenticateToken, async (req, res) => {
 
     // Vérifier que la demande existe et appartient au client
     const serviceRequest = await queryOne(
-      'SELECT * FROM service_requests WHERE id = $1 AND client_id = $2 AND status = $3',
+      'SELECT * FROM quotes WHERE id = $1 AND client_id = $2 AND status = $3',
       [id, clientId, 'pending']
     );
 
@@ -516,7 +714,7 @@ router.post('/:id/accept-price', authenticateToken, async (req, res) => {
       });
     }
 
-    if (!serviceRequest.proposed_price) {
+    if (!serviceRequest.price_cents) {
       return res.status(400).json({
         success: false,
         message: 'Aucun prix proposé'
@@ -524,63 +722,66 @@ router.post('/:id/accept-price', authenticateToken, async (req, res) => {
     }
 
     // Accepter le prix et changer le statut
-    const priceNegotiation = typeof serviceRequest.price_negotiation === 'string' 
-      ? JSON.parse(serviceRequest.price_negotiation) 
-      : serviceRequest.price_negotiation || {};
-    priceNegotiation.status = 'accepted';
-
     await query(
-      `UPDATE service_requests 
-       SET actual_price = $1, status = $2, price_negotiation = $3, updated_at = NOW() 
-       WHERE id = $4`,
-      [serviceRequest.proposed_price, 'accepted', JSON.stringify(priceNegotiation), id]
+      `UPDATE quotes 
+       SET status = $1, updated_at = NOW() 
+       WHERE id = $2`,
+      ['accepted', id]
     );
 
     // Récupérer la demande mise à jour
     const updatedRequest = await queryOne(
-      'SELECT * FROM service_requests WHERE id = $1',
+      'SELECT * FROM quotes WHERE id = $1',
       [id]
     );
 
     // Émettre un événement WebSocket au déménageur
     const io = req.app.get('io');
     if (io) {
-      io.to(`user_${serviceRequest.demenageur_id}`).emit('price_accepted', {
+      io.to(`user_${serviceRequest.mover_id}`).emit('price_accepted', {
         missionId: serviceRequest.id,
-        acceptedPrice: serviceRequest.proposed_price,
+        acceptedPrice: serviceRequest.price_cents ? serviceRequest.price_cents / 100 : null,
         clientName: `${req.user.firstName} ${req.user.lastName}`
       });
     }
 
     // Créer automatiquement un chat pour cette demande acceptée
     try {
-      // Vérifier qu'un chat n'existe pas déjà
+      // Vérifier qu'un chat n'existe pas déjà (utiliser conversations au lieu de chats)
       const existingChat = await queryOne(
-        'SELECT * FROM chats WHERE service_request_id = $1',
+        'SELECT * FROM conversations WHERE id = $1',
         [serviceRequest.id]
       );
       if (!existingChat) {
+        // Extraire serviceType depuis services
+        let services = serviceRequest.services;
+        if (typeof services === 'string') {
+          try {
+            services = JSON.parse(services);
+          } catch (e) {
+            services = {};
+          }
+        }
+        const serviceType = services.serviceType || 'demenagement';
+        
         const chatResult = await query(
-          `INSERT INTO chats (id, service_request_id, client_id, demenageur_id, status, created_at, updated_at)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), NOW())
+          `INSERT INTO conversations (id, client_id, mover_id, created_at, updated_at)
+           VALUES (gen_random_uuid(), $1, $2, NOW(), NOW())
            RETURNING *`,
-          [serviceRequest.id, serviceRequest.client_id, serviceRequest.demenageur_id, 'active']
+          [serviceRequest.client_id, serviceRequest.mover_id]
         );
         const chat = chatResult.rows[0];
 
-        // Créer un message système de bienvenue
+        // Créer un message système de bienvenue (utiliser messages au lieu de chat_messages)
         const welcomeMessageResult = await query(
-          `INSERT INTO chat_messages (id, chat_id, service_request_id, sender_id, sender_type, content, message_type, status, created_at, updated_at)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+          `INSERT INTO messages (id, sender_id, recipient_id, content, conversation_id, created_at)
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW())
            RETURNING *`,
           [
-            chat.id,
-            serviceRequest.id,
-            serviceRequest.demenageur_id,
-            'demenageur',
-            `Bonjour ! Votre demande a été acceptée. Nous pouvons maintenant discuter des détails de votre ${serviceRequest.service_type}.`,
-            'system',
-            'sent'
+            serviceRequest.mover_id,
+            serviceRequest.client_id,
+            `Bonjour ! Votre demande a été acceptée. Nous pouvons maintenant discuter des détails de votre ${serviceType}.`,
+            chat.id
           ]
         );
 
@@ -593,7 +794,7 @@ router.post('/:id/accept-price', authenticateToken, async (req, res) => {
             message: welcomeMessageResult.rows[0].content
           });
 
-          io.to(`user_${serviceRequest.demenageur_id}`).emit('chat_created', {
+          io.to(`user_${serviceRequest.mover_id}`).emit('chat_created', {
             chatId: chat.id,
             serviceRequestId: serviceRequest.id,
             clientName: `${req.user.firstName} ${req.user.lastName}`,
@@ -632,7 +833,7 @@ router.post('/:id/negotiate-price', authenticateToken, async (req, res) => {
 
     // Vérifier que la demande existe et appartient au client
     const serviceRequest = await queryOne(
-      'SELECT * FROM service_requests WHERE id = $1 AND client_id = $2 AND status = $3',
+      'SELECT * FROM quotes WHERE id = $1 AND client_id = $2 AND status = $3',
       [id, clientId, 'pending']
     );
 
@@ -643,40 +844,56 @@ router.post('/:id/negotiate-price', authenticateToken, async (req, res) => {
       });
     }
 
-    if (!serviceRequest.proposed_price) {
+    if (!serviceRequest.price_cents) {
       return res.status(400).json({
         success: false,
         message: 'Aucun prix proposé'
       });
     }
 
-    // Mettre à jour avec le prix du client
-    const priceNegotiation = typeof serviceRequest.price_negotiation === 'string'
-      ? JSON.parse(serviceRequest.price_negotiation)
-      : serviceRequest.price_negotiation || {};
-    priceNegotiation.clientPrice = clientPrice;
-    priceNegotiation.status = 'negotiating';
-
+    // Mettre à jour avec le prix du client (convertir en cents)
+    const clientPriceCents = Math.round(clientPrice * 100);
     await query(
-      `UPDATE service_requests 
-       SET price_negotiation = $1, updated_at = NOW() 
+      `UPDATE quotes 
+       SET price_cents = $1, updated_at = NOW() 
        WHERE id = $2`,
-      [JSON.stringify(priceNegotiation), id]
+      [clientPriceCents, id]
     );
+
+    // Créer une notification persistante pour le déménageur
+    let demenageurNotification = null;
+    const io = req.app.get('io'); // Obtenir l'instance Socket.IO
+    try {
+      demenageurNotification = await createNotification({
+        userId: serviceRequest.mover_id,
+        title: 'Nouvelle proposition du client',
+        message: `${req.user.firstName || 'Client'} ${req.user.lastName || ''} propose ${clientPrice} TND pour la mission.`,
+        type: 'client_price_proposed',
+        data: {
+          missionId: serviceRequest.id,
+          clientPrice,
+          clientId: serviceRequest.client_id,
+          demenageurId,
+        },
+        io: io, // Passer l'instance Socket.IO pour l'envoi en temps réel
+      });
+    } catch (notificationError) {
+      console.error('❌ Erreur création notification client_price_proposed:', notificationError);
+    }
 
     // Récupérer la demande mise à jour
     const updatedRequest = await queryOne(
-      'SELECT * FROM service_requests WHERE id = $1',
+      'SELECT * FROM quotes WHERE id = $1',
       [id]
     );
 
     // Émettre un événement WebSocket au déménageur
-    const io = req.app.get('io');
     if (io) {
-      io.to(`user_${serviceRequest.demenageur_id}`).emit('price_negotiated', {
+      io.to(`user_${serviceRequest.mover_id}`).emit('price_negotiated', {
         missionId: serviceRequest.id,
         clientPrice: clientPrice,
-        clientName: `${req.user.firstName} ${req.user.lastName}`
+        clientName: `${req.user.firstName} ${req.user.lastName}`,
+        notificationId: demenageurNotification ? demenageurNotification.id : null,
       });
     }
 
@@ -703,7 +920,7 @@ router.post('/:id/accept-negotiation', authenticateToken, async (req, res) => {
 
     // Vérifier que la demande existe et appartient au déménageur
     const serviceRequest = await queryOne(
-      'SELECT * FROM service_requests WHERE id = $1 AND demenageur_id = $2 AND status = $3',
+      'SELECT * FROM quotes WHERE id = $1 AND mover_id = $2 AND status = $3',
       [id, demenageurId, 'pending']
     );
 
@@ -714,40 +931,55 @@ router.post('/:id/accept-negotiation', authenticateToken, async (req, res) => {
       });
     }
 
-    const priceNegotiation = typeof serviceRequest.price_negotiation === 'string'
-      ? JSON.parse(serviceRequest.price_negotiation)
-      : serviceRequest.price_negotiation || {};
-
-    if (!priceNegotiation.clientPrice) {
+    if (!serviceRequest.price_cents) {
       return res.status(400).json({
         success: false,
         message: 'Aucune négociation en cours'
       });
     }
 
-    // Accepter le prix du client et changer le statut
-    priceNegotiation.status = 'accepted';
-
+    // Accepter le prix et changer le statut
     await query(
-      `UPDATE service_requests 
-       SET actual_price = $1, status = $2, price_negotiation = $3, updated_at = NOW() 
-       WHERE id = $4`,
-      [priceNegotiation.clientPrice, 'accepted', JSON.stringify(priceNegotiation), id]
+      `UPDATE quotes 
+       SET status = $1, updated_at = NOW() 
+       WHERE id = $2`,
+      ['accepted', id]
     );
 
     // Récupérer la demande mise à jour
     const updatedRequest = await queryOne(
-      'SELECT * FROM service_requests WHERE id = $1',
+      'SELECT * FROM quotes WHERE id = $1',
       [id]
     );
 
+    // Créer une notification pour le client
+    let negotiationNotification = null;
+    const io = req.app.get('io'); // Obtenir l'instance Socket.IO
+    try {
+      negotiationNotification = await createNotification({
+        userId: serviceRequest.client_id,
+        title: 'Négociation acceptée',
+        message: `${req.user.firstName} ${req.user.lastName} a accepté votre proposition de ${serviceRequest.price_cents ? serviceRequest.price_cents / 100 : 0} TND.`,
+        type: 'negotiation_accepted',
+        data: {
+          missionId: serviceRequest.id,
+          acceptedPrice: serviceRequest.price_cents ? serviceRequest.price_cents / 100 : null,
+          demenageurName: `${req.user.firstName} ${req.user.lastName}`,
+          demenageurId,
+        },
+        io: io, // Passer l'instance Socket.IO pour l'envoi en temps réel
+      });
+    } catch (notificationError) {
+      console.error('❌ Erreur lors de la création de la notification negotiation_accepted:', notificationError);
+    }
+
     // Émettre un événement WebSocket au client
-    const io = req.app.get('io');
     if (io) {
       io.to(`user_${serviceRequest.client_id}`).emit('negotiation_accepted', {
         missionId: serviceRequest.id,
-        acceptedPrice: priceNegotiation.clientPrice,
-        demenageurName: `${req.user.firstName} ${req.user.lastName}`
+        acceptedPrice: serviceRequest.price_cents ? serviceRequest.price_cents / 100 : null,
+        demenageurName: `${req.user.firstName} ${req.user.lastName}`,
+        notificationId: negotiationNotification ? negotiationNotification.id : null,
       });
     }
 
@@ -779,39 +1011,44 @@ router.get('/pending-for-demenageur', authenticateToken, async (req, res) => {
 
     // Récupérer les demandes en attente avec toutes les données
     const pendingRequestsRaw = await queryMany(
-      `SELECT sr.*, 
+      `SELECT q.*, 
               c.id as client_id, c.first_name as client_first_name, c.last_name as client_last_name, 
               c.email as client_email, c.phone as client_phone
-       FROM service_requests sr
-       JOIN users c ON sr.client_id = c.id
-       WHERE sr.status = 'pending' AND (sr.viewed_by_demenageur IS NULL OR sr.viewed_by_demenageur = false)
-       ORDER BY sr.created_at DESC
+       FROM quotes q
+       JOIN users c ON q.client_id = c.id
+       WHERE q.status = 'pending' AND q.mover_id IS NULL
+       ORDER BY q.created_at DESC
        LIMIT 10`
     );
 
     // Transformer les données en camelCase pour le frontend
     const pendingRequests = pendingRequestsRaw.map(req => {
-      // Parser service_details si c'est une chaîne JSON
-      let serviceDetails = req.service_details;
+      // Parser services si c'est une chaîne JSON
+      let serviceDetails = req.services;
       if (typeof serviceDetails === 'string') {
         try {
           serviceDetails = JSON.parse(serviceDetails);
         } catch (e) {
           serviceDetails = {};
         }
+      } else if (!serviceDetails) {
+        serviceDetails = {};
       }
+
+      // Extraire serviceType depuis services si disponible
+      const serviceType = serviceDetails.serviceType || 'demenagement';
 
       return {
         id: req.id,
         _id: req.id, // Pour compatibilité avec MongoDB
-        serviceType: req.service_type,
-        departureAddress: req.departure_address,
-        destinationAddress: req.destination_address,
+        serviceType: serviceType,
+        departureAddress: req.from_address,
+        destinationAddress: req.to_address,
         serviceDetails: serviceDetails,
-        estimatedPrice: req.proposed_price,
-        scheduledDate: req.scheduled_date,
+        estimatedPrice: req.price_cents ? req.price_cents / 100 : null,
+        scheduledDate: req.move_date,
         status: req.status,
-        viewedByDemenageur: req.viewed_by_demenageur,
+        viewedByDemenageur: false, // Pas de champ dans quotes
         createdAt: req.created_at,
         updatedAt: req.updated_at,
         clientId: {
@@ -823,7 +1060,7 @@ router.get('/pending-for-demenageur', authenticateToken, async (req, res) => {
           email: req.client_email,
           phone: req.client_phone
         },
-        demenageurId: req.demenageur_id
+        demenageurId: req.mover_id
       };
     });
 
@@ -864,7 +1101,7 @@ router.post('/:id/mark-viewed', authenticateToken, async (req, res) => {
     }
 
     const serviceRequest = await queryOne(
-      'SELECT * FROM service_requests WHERE id = $1',
+      'SELECT * FROM quotes WHERE id = $1',
       [serviceRequestId]
     );
     
@@ -875,15 +1112,15 @@ router.post('/:id/mark-viewed', authenticateToken, async (req, res) => {
       });
     }
 
-    // Marquer comme vue par le déménageur
+    // Marquer comme vue par le déménageur (pas de champ dans quotes, donc on met juste à jour updated_at)
     await query(
-      'UPDATE service_requests SET viewed_by_demenageur = true, updated_at = NOW() WHERE id = $1',
+      'UPDATE quotes SET updated_at = NOW() WHERE id = $1',
       [serviceRequestId]
     );
 
     // Récupérer la demande mise à jour
     const updatedRequest = await queryOne(
-      'SELECT * FROM service_requests WHERE id = $1',
+      'SELECT * FROM quotes WHERE id = $1',
       [serviceRequestId]
     );
 

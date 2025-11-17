@@ -5,7 +5,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Location from 'expo-location';
 import MapSelectionScreen from './MapSelectionScreen';
 
-const ReservationForm = ({ demenageur, onClose, onSubmit, requestType, setRequestType }) => {
+const ReservationForm = ({ demenageur, onClose, onSubmit, requestType, setRequestType, onBack }) => {
   // Fonction pour obtenir la date du jour en format JJ/MM/AAAA
   const getTodayDate = () => {
     const today = new Date();
@@ -458,42 +458,27 @@ const ReservationForm = ({ demenageur, onClose, onSubmit, requestType, setReques
     <View style={styles.reservationFormContainer}>
       <ScrollView style={styles.reservationFormContent} showsVerticalScrollIndicator={false}>
         <View style={styles.reservationHeader}>
+          {onBack && (
+            <TouchableOpacity style={styles.backButton} onPress={onBack}>
+              <Ionicons name="arrow-back" size={24} color="#ffffff" />
+            </TouchableOpacity>
+          )}
           <Text style={styles.reservationTitle}>Demande de Service</Text>
           <Text style={styles.reservationSubtitle}>
             {demenageur.company_name || `${demenageur.first_name} ${demenageur.last_name}`}
           </Text>
+          <View style={styles.serviceTypeBadge}>
+            <Ionicons 
+              name={requestType === 'demenagement' ? 'home' : 'car'} 
+              size={16} 
+              color="#ff6b35" 
+            />
+            <Text style={styles.serviceTypeBadgeText}>
+              {requestType === 'demenagement' ? 'Déménagement' : 'Transport'}
+            </Text>
+          </View>
           <TouchableOpacity style={styles.closeButton} onPress={onClose}>
             <Ionicons name="close" size={24} color="#ffffff" />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.serviceTypeSelector}>
-          <TouchableOpacity 
-            style={[styles.serviceTypeButton, requestType === 'demenagement' && styles.serviceTypeButtonActive]}
-            onPress={() => setRequestType('demenagement')}
-          >
-            <Ionicons 
-              name="home" 
-              size={20} 
-              color={requestType === 'demenagement' ? '#ffffff' : '#ff6b35'} 
-            />
-            <Text style={[styles.serviceTypeButtonText, requestType === 'demenagement' && styles.serviceTypeButtonTextActive]}>
-              Déménagement
-            </Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.serviceTypeButton, requestType === 'transport' && styles.serviceTypeButtonActive]}
-            onPress={() => setRequestType('transport')}
-          >
-            <Ionicons 
-              name="archive" 
-              size={20} 
-              color={requestType === 'transport' ? '#ffffff' : '#ff6b35'} 
-            />
-            <Text style={[styles.serviceTypeButtonText, requestType === 'transport' && styles.serviceTypeButtonTextActive]}>
-              Transport
-            </Text>
           </TouchableOpacity>
         </View>
 
@@ -936,6 +921,13 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     position: 'relative',
   },
+  backButton: {
+    position: 'absolute',
+    top: 50,
+    left: 0,
+    padding: 10,
+    zIndex: 1,
+  },
   reservationTitle: {
     fontSize: 24,
     fontWeight: 'bold',
@@ -948,6 +940,26 @@ const styles = StyleSheet.create({
     color: '#ff6b35',
     textAlign: 'center',
     fontWeight: '600',
+    marginBottom: 10,
+  },
+  serviceTypeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 107, 53, 0.1)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    alignSelf: 'center',
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 107, 53, 0.3)',
+  },
+  serviceTypeBadgeText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#ff6b35',
+    marginLeft: 6,
   },
   closeButton: {
     position: 'absolute',
@@ -1174,38 +1186,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     marginLeft: 5,
-  },
-  serviceTypeSelector: {
-    flexDirection: 'row',
-    marginHorizontal: 20,
-    marginBottom: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 12,
-    padding: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 107, 53, 0.3)',
-  },
-  serviceTypeButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    marginHorizontal: 2,
-  },
-  serviceTypeButtonActive: {
-    backgroundColor: '#ff6b35',
-  },
-  serviceTypeButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#ff6b35',
-    marginLeft: 8,
-  },
-  serviceTypeButtonTextActive: {
-    color: '#ffffff',
   },
   modalOverlay: {
     flex: 1,

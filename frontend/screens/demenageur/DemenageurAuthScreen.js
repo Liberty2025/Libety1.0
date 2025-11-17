@@ -108,8 +108,39 @@ const DemenageurAuthScreen = ({ onAuthSuccess, onBack }) => {
     try {
       const API_BASE_URL = getAPIBaseURL();
       const endpoint = isLogin ? '/api/auth/demenageur/login' : '/api/auth/demenageur/register';
+      const fullURL = `${API_BASE_URL}${endpoint}`;
       
-      console.log(`📤 Tentative de ${isLogin ? 'connexion' : 'inscription'} déménageur:`, `${API_BASE_URL}${endpoint}`);
+      console.log(`📤 Tentative de ${isLogin ? 'connexion' : 'inscription'} déménageur:`, fullURL);
+      console.log(`🌐 IP du serveur: ${API_BASE_URL}`);
+      
+      // Test de connectivité basique avant la requête principale
+      try {
+        const healthCheckURL = `${API_BASE_URL}/api/health`;
+        console.log(`🔍 Test de connectivité: ${healthCheckURL}`);
+        const healthController = new AbortController();
+        const healthTimeoutId = setTimeout(() => healthController.abort(), 5000);
+        
+        const healthResponse = await fetch(healthCheckURL, { 
+          method: 'GET',
+          headers: { 'Accept': 'application/json' },
+          signal: healthController.signal
+        });
+        
+        clearTimeout(healthTimeoutId);
+        
+        if (healthResponse.ok) {
+          console.log(`✅ Serveur accessible: ${API_BASE_URL}`);
+        } else {
+          console.warn(`⚠️ Serveur répond mais avec erreur: ${healthResponse.status}`);
+        }
+      } catch (healthError) {
+        if (healthError.name !== 'AbortError') {
+          console.warn(`⚠️ Test de connectivité échoué (tentative continue): ${healthError.message}`);
+        } else {
+          console.warn(`⚠️ Timeout du test de connectivité (tentative continue)`);
+        }
+        // On continue quand même, car le endpoint health peut ne pas exister
+      }
       
       if (isLogin) {
         const requestData = { 
@@ -117,24 +148,79 @@ const DemenageurAuthScreen = ({ onAuthSuccess, onBack }) => {
           password: formData.password 
         };
 
-        const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-          },
-          body: JSON.stringify(requestData),
-        });
+        console.log(`📧 Email: ${formData.email}`);
+        console.log(`🔐 Mot de passe: ${formData.password ? '***' : 'vide'}`);
+
+        // Créer un AbortController pour gérer le timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 secondes timeout
+
+        let response;
+        try {
+          response = await fetch(fullURL, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: JSON.stringify(requestData),
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+          
+          if (fetchError.name === 'AbortError' || fetchError.message === 'Aborted') {
+            console.error('❌ Timeout de connexion (10s)');
+            Alert.alert(
+              'Erreur de connexion', 
+              'Le serveur ne répond pas dans les délais. Vérifiez que:\n' +
+              '• Le serveur backend est démarré\n' +
+              '• Vous êtes sur le même réseau Wi-Fi\n' +
+              '• L\'adresse IP est correcte: ' + API_BASE_URL
+            );
+            return;
+          } else if (fetchError.message.includes('Network request failed') || 
+                     fetchError.message.includes('ECONNREFUSED') ||
+                     fetchError.message.includes('ERR_INTERNET_DISCONNECTED')) {
+            console.error('❌ Erreur réseau:', fetchError.message);
+            Alert.alert(
+              'Erreur de connexion', 
+              'Impossible de se connecter au serveur.\n\n' +
+              'Vérifications:\n' +
+              '1. Le serveur backend est-il démarré?\n' +
+              '2. Êtes-vous sur le même réseau Wi-Fi?\n' +
+              '3. L\'adresse IP est correcte: ' + API_BASE_URL + '\n' +
+              '4. Le firewall autorise-t-il le port 3000?'
+            );
+            return;
+          } else {
+            throw fetchError;
+          }
+        }
 
         console.log(`📥 Réponse reçue: ${response.status} ${response.statusText}`);
+        console.log(`📋 Headers:`, Object.fromEntries(response.headers.entries()));
 
         let result;
         try {
-          result = await response.json();
+          const responseText = await response.text();
+          console.log(`📄 Corps de la réponse:`, responseText.substring(0, 200));
+          
+          if (!responseText) {
+            throw new Error('Réponse vide');
+          }
+          
+          result = JSON.parse(responseText);
         } catch (jsonError) {
-          const errorText = await response.text();
-          console.error('❌ Erreur de parsing JSON:', errorText);
-          Alert.alert('Erreur', `Erreur serveur: ${response.status} ${response.statusText}`);
+          console.error('❌ Erreur de parsing JSON:', jsonError);
+          console.error('❌ Type de contenu:', response.headers.get('content-type'));
+          Alert.alert(
+            'Erreur serveur', 
+            `Le serveur a répondu avec une erreur (${response.status}).\n\n` +
+            `Vérifiez que le backend est correctement configuré.\n` +
+            `URL: ${fullURL}`
+          );
           return;
         }
 
@@ -241,11 +327,35 @@ const DemenageurAuthScreen = ({ onAuthSuccess, onBack }) => {
       }
     } catch (error) {
       console.error('❌ Erreur d\'authentification:', error);
-      console.error('❌ Détails:', error.message);
-      if (error.message.includes('Network request failed') || error.message.includes('ECONNREFUSED')) {
-        Alert.alert('Erreur de connexion', 'Impossible de se connecter au serveur. Vérifiez votre connexion internet.');
+      console.error('❌ Type d\'erreur:', error.name);
+      console.error('❌ Message:', error.message);
+      console.error('❌ Stack:', error.stack);
+      
+      if (error.name === 'AbortError' || error.message === 'Aborted' || error.message.includes('Timeout')) {
+        Alert.alert(
+          'Timeout de connexion', 
+          'Le serveur ne répond pas. Vérifiez que le serveur backend est démarré et accessible sur ' + getAPIBaseURL()
+        );
+      } else if (error.message.includes('Network request failed') || 
+                 error.message.includes('ECONNREFUSED') ||
+                 error.message.includes('ERR_INTERNET_DISCONNECTED') ||
+                 error.message.includes('NetworkError')) {
+        Alert.alert(
+          'Erreur de connexion réseau', 
+          'Impossible de se connecter au serveur.\n\n' +
+          'Solutions possibles:\n' +
+          '• Vérifiez que le serveur backend est démarré\n' +
+          '• Assurez-vous d\'être sur le même réseau Wi-Fi\n' +
+          '• Vérifiez l\'adresse IP: ' + getAPIBaseURL() + '\n' +
+          '• Désactivez temporairement le pare-feu\n' +
+          '• Vérifiez que le port 3000 est accessible'
+        );
       } else {
-        Alert.alert('Erreur', `Erreur de connexion au serveur: ${error.message}`);
+        Alert.alert(
+          'Erreur', 
+          `Erreur inattendue: ${error.message}\n\n` +
+          `URL: ${getAPIBaseURL()}${isLogin ? '/api/auth/demenageur/login' : '/api/auth/demenageur/register'}`
+        );
       }
     }
   };

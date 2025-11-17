@@ -13,6 +13,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import useRealtimeChat from '../../hooks/useRealtimeChat';
 import { getAPIBaseURL } from '../../config/api';
+import { useTutorialRefs } from '../../hooks/useTutorialRefs';
+import { useNavigationTutorial } from '../../hooks/useNavigationTutorial';
 
 const ClientChatScreen = ({ authToken, userData }) => {
   const [chats, setChats] = useState([]);
@@ -21,6 +23,18 @@ const ClientChatScreen = ({ authToken, userData }) => {
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const scrollViewRef = useRef(null);
+  
+  // Refs pour le tutoriel
+  const chatsListRef = useRef(null);
+  const messageInputRef = useRef(null);
+  
+  // Enregistrer les refs pour le tutoriel
+  const tutorialRefs = {
+    chatsList: chatsListRef,
+    messageInput: messageInputRef,
+  };
+  
+  useNavigationTutorial('Chat', tutorialRefs);
 
   // Utiliser la configuration API centralisée
   const API_BASE_URL = getAPIBaseURL();
@@ -201,32 +215,46 @@ const ClientChatScreen = ({ authToken, userData }) => {
       if (result.success) {
         console.log('✅ Chats chargés avec succès:', result.chats?.length || 0, 'chats');
         // Transformer les données pour correspondre au format attendu par le frontend
-        const transformedChats = (result.chats || []).map(chat => ({
-          _id: chat.id || chat._id,
-          demenageurId: {
-            _id: chat.demenageur_id, // Colonne de la table chats
-            first_name: chat.demenageur_first_name, // Alias du JOIN
-            last_name: chat.demenageur_last_name, // Alias du JOIN
-            email: null, // Non retourné par la requête actuelle
-            phone: null, // Non retourné par la requête actuelle
-            is_verified: false // Non retourné par la requête actuelle
-          },
-          serviceRequestId: {
-            _id: chat.service_request_id, // Colonne de la table chats
-            serviceType: chat.service_type, // Alias du JOIN
-            departureAddress: chat.departure_address // Alias du JOIN
-          },
-          lastMessage: chat.lastMessage ? {
-            _id: chat.lastMessage.id || null,
-            content: chat.lastMessage.content,
-            createdAt: chat.lastMessage.createdAt || chat.lastMessage.created_at,
-            senderType: chat.lastMessage.senderType || chat.lastMessage.sender_type
-          } : null,
-          lastMessageAt: chat.last_message_at || chat.lastMessageAt || chat.created_at,
-          unreadByClient: chat.unread_by_client || chat.unreadByClient || 0,
-          createdAt: chat.created_at || chat.createdAt
-        }));
+        // Le backend renvoie déjà les données transformées avec demenageurId et serviceRequestId
+        const transformedChats = (result.chats || []).map(chat => {
+          // Utiliser les données du backend si elles existent, sinon utiliser les anciennes clés
+          return {
+            _id: chat.id || chat._id,
+            demenageurId: chat.demenageurId || {
+              _id: chat.demenageur_id || chat.mover_id,
+              first_name: chat.mover_first_name || chat.demenageur_first_name,
+              last_name: chat.mover_last_name || chat.demenageur_last_name,
+              firstName: chat.mover_first_name || chat.demenageur_first_name,
+              lastName: chat.mover_last_name || chat.demenageur_last_name,
+              email: null,
+              phone: null,
+              is_verified: false
+            },
+            serviceRequestId: chat.serviceRequestId || {
+              _id: chat.service_request_id,
+              serviceType: chat.service_type,
+              departureAddress: chat.departure_address || chat.quote_from_address
+            },
+            lastMessage: chat.lastMessage ? {
+              _id: chat.lastMessage.id || chat.lastMessage._id || null,
+              content: chat.lastMessage.content,
+              createdAt: chat.lastMessage.createdAt || chat.lastMessage.created_at,
+              senderType: chat.lastMessage.senderType || chat.lastMessage.sender_type
+            } : null,
+            lastMessageAt: chat.lastMessageAt || chat.last_message_at || chat.created_at,
+            unreadByClient: chat.unreadCount || chat.unread_by_client || chat.unreadByClient || 0,
+            createdAt: chat.createdAt || chat.created_at
+          };
+        });
         console.log('📋 Chats transformés:', transformedChats.length);
+        // Debug: Afficher les données du premier chat
+        if (transformedChats.length > 0) {
+          console.log('📋 Premier chat transformé:', {
+            demenageurId: transformedChats[0].demenageurId,
+            serviceRequestId: transformedChats[0].serviceRequestId,
+            serviceType: transformedChats[0].serviceRequestId?.serviceType
+          });
+        }
         setChats(transformedChats);
       } else {
         console.error('❌ Erreur lors du chargement des chats:', result.message);
@@ -423,10 +451,12 @@ const ClientChatScreen = ({ authToken, userData }) => {
             </View>
             <View style={styles.conversationDetails}>
               <Text style={styles.conversationName}>
-                {selectedChat.demenageurId.first_name} {selectedChat.demenageurId.last_name}
+                {selectedChat.demenageurId?.first_name || selectedChat.demenageurId?.firstName || ''} {selectedChat.demenageurId?.last_name || selectedChat.demenageurId?.lastName || ''}
               </Text>
               <Text style={styles.serviceType}>
-                {selectedChat.serviceRequestId?.serviceType || 'Service'}
+                {selectedChat.serviceRequestId?.serviceType === 'demenagement' ? 'Déménagement' : 
+                 selectedChat.serviceRequestId?.serviceType === 'transport' ? 'Transport' : 
+                 selectedChat.serviceRequestId?.serviceType || 'Service'}
               </Text>
             </View>
           </View>
@@ -443,38 +473,45 @@ const ClientChatScreen = ({ authToken, userData }) => {
           showsVerticalScrollIndicator={false}
           onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
         >
-          {messages.map((message) => (
+          {messages.map((message, index) => {
+            const messageKey = message?._id || message?.id || `${message?.createdAt || 'msg'}-${index}`;
+            // Dans la partie client : messages du client à droite, messages du déménageur à gauche
+            const isClientMessage = message.senderType === 'client';
+            
+            return (
             <View 
-              key={message._id} 
+              key={messageKey} 
               style={[
                 styles.messageContainer,
-                message.senderType === 'client' ? styles.messageRight : styles.messageLeft
+                isClientMessage ? styles.messageRight : styles.messageLeft
               ]}
             >
               <View style={[
                 styles.messageBubble,
-                message.senderType === 'client' ? styles.messageBubbleRight : styles.messageBubbleLeft
+                isClientMessage ? styles.messageBubbleRight : styles.messageBubbleLeft
               ]}>
                 <Text style={[
                   styles.messageText,
-                  message.senderType === 'client' ? styles.messageTextRight : styles.messageTextLeft
+                  isClientMessage ? styles.messageTextRight : styles.messageTextLeft
                 ]}>
                   {message.content}
                 </Text>
                 <Text style={[
                   styles.messageTime,
-                  message.senderType === 'client' ? styles.messageTimeRight : styles.messageTimeLeft
+                  isClientMessage ? styles.messageTimeRight : styles.messageTimeLeft
                 ]}>
                   {formatTime(message.createdAt)}
                 </Text>
               </View>
             </View>
-          ))}
+          );
+          })}
         </ScrollView>
 
         {/* Input de message */}
         <View style={styles.messageInputContainer}>
           <TextInput
+            ref={messageInputRef}
             style={styles.messageInput}
             placeholder="Tapez votre message..."
             placeholderTextColor="#8e8e93"
@@ -503,7 +540,11 @@ const ClientChatScreen = ({ authToken, userData }) => {
           <Text style={styles.loadingText}>Chargement des conversations...</Text>
         </View>
       ) : (
-        <ScrollView style={styles.conversationsList} showsVerticalScrollIndicator={false}>
+        <ScrollView 
+          ref={chatsListRef}
+          style={styles.conversationsList} 
+          showsVerticalScrollIndicator={false}
+        >
           <View style={styles.timelineLine} />
           <View style={styles.timelineContainer}>
             {chats.length === 0 ? (
@@ -515,9 +556,11 @@ const ClientChatScreen = ({ authToken, userData }) => {
                 </Text>
               </View>
             ) : (
-              chats.map((chat) => (
+              chats.map((chat, index) => {
+                const chatKey = chat?._id || chat?.id || `${chat?.serviceRequestId?._id || 'chat'}-${index}`;
+                return (
               <TouchableOpacity 
-                key={chat._id}
+                key={chatKey}
                 style={styles.conversationItem}
                 onPress={() => selectChat(chat)}
               >
@@ -528,9 +571,14 @@ const ClientChatScreen = ({ authToken, userData }) => {
                   <View style={styles.conversationHeader}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
                       <Text style={styles.conversationName}>
-                        {chat.demenageurId.first_name} {chat.demenageurId.last_name}
+                        {(() => {
+                          const firstName = chat.demenageurId?.first_name || chat.demenageurId?.firstName || '';
+                          const lastName = chat.demenageurId?.last_name || chat.demenageurId?.lastName || '';
+                          const fullName = `${firstName} ${lastName}`.trim();
+                          return fullName || 'Déménageur';
+                        })()}
                       </Text>
-                      {chat.demenageurId.is_verified && (
+                      {chat.demenageurId?.is_verified && (
                         <Ionicons 
                           name="checkmark-circle" 
                           size={16} 
@@ -539,6 +587,16 @@ const ClientChatScreen = ({ authToken, userData }) => {
                         />
                       )}
                     </View>
+                  </View>
+                  
+                  {/* Affichage du type de service */}
+                  <View style={styles.serviceTypeContainer}>
+                    <View style={[styles.serviceDot, { backgroundColor: getServiceDotColor(chat.serviceRequestId?.serviceType) }]} />
+                    <Text style={styles.serviceTypeText}>
+                      {chat.serviceRequestId?.serviceType === 'demenagement' ? 'Déménagement' : 
+                       chat.serviceRequestId?.serviceType === 'transport' ? 'Transport' : 
+                       chat.serviceRequestId?.serviceType || 'Service'}
+                    </Text>
                   </View>
                   
                   <View style={styles.conversationFooter}>
@@ -559,9 +617,8 @@ const ClientChatScreen = ({ authToken, userData }) => {
                   </View>
                   
                   <View style={styles.serviceInfo}>
-                    <View style={[styles.serviceDot, { backgroundColor: getServiceDotColor(chat.serviceRequestId?.serviceType) }]} />
-                    <Text>
-                      {chat.serviceRequestId?.serviceType || 'Service'} • {chat.serviceRequestId?.departureAddress || 'Adresse non disponible'}
+                    <Text style={styles.serviceAddress}>
+                      {chat.serviceRequestId?.departureAddress || 'Adresse non disponible'}
                     </Text>
                   </View>
                   
@@ -573,7 +630,8 @@ const ClientChatScreen = ({ authToken, userData }) => {
                   </Text>
                 </View>
               </TouchableOpacity>
-            ))
+            );
+            })
             )}
           </View>
         </ScrollView>
@@ -733,14 +791,30 @@ const styles = StyleSheet.create({
     opacity: 0.3,
     zIndex: -1,
   },
+  serviceTypeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  serviceTypeText: {
+    fontSize: 13,
+    color: '#ffffff',
+    fontWeight: '600',
+    fontFamily: Platform.OS === 'ios' ? 'Montserrat-SemiBold' : 'Montserrat-SemiBold',
+  },
   serviceInfo: {
     fontSize: 12,
     color: '#ffffff',
     fontStyle: 'italic',
     fontFamily: Platform.OS === 'ios' ? 'Montserrat-Regular' : 'Montserrat-Regular',
-    marginTop: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
+    marginTop: 4,
+    opacity: 0.8,
+  },
+  serviceAddress: {
+    fontSize: 12,
+    color: '#ffffff',
+    opacity: 0.8,
   },
   serviceDot: {
     width: 8,

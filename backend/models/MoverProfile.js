@@ -66,6 +66,23 @@ const MoverProfile = sequelize.define('MoverProfile', {
   is_verified: {
     type: DataTypes.BOOLEAN,
     defaultValue: false
+  },
+  cin_number: {
+    type: DataTypes.STRING(20),
+    unique: true,
+    allowNull: true
+  },
+  carte_grise: {
+    type: DataTypes.JSONB,
+    allowNull: true
+  },
+  carte_cin: {
+    type: DataTypes.JSONB,
+    allowNull: true
+  },
+  permis: {
+    type: DataTypes.JSONB,
+    allowNull: true
   }
 }, {
   tableName: 'mover_profiles',

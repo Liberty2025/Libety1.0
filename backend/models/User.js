@@ -32,14 +32,17 @@ const User = sequelize.define('User', {
     type: DataTypes.ENUM('client', 'demenageur', 'admin'),
     allowNull: false
   },
-  identityCardNumber: {
-    type: DataTypes.STRING(20),
-    unique: true,
+  carte_grise: {
+    type: DataTypes.JSONB,
     allowNull: true
   },
-  documents: {
+  carte_cin: {
     type: DataTypes.JSONB,
-    defaultValue: {}
+    allowNull: true
+  },
+  permis: {
+    type: DataTypes.JSONB,
+    allowNull: true
   },
   is_verified: {
     type: DataTypes.BOOLEAN,

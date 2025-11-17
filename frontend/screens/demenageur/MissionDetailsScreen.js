@@ -510,6 +510,12 @@ const MissionDetailsScreen = ({ route, navigation }) => {
             <Text style={styles.serviceTypeText}>
               {currentMission.serviceType === 'demenagement' ? 'Déménagement' : 'Transport'}
             </Text>
+            {currentMission.serviceDetails?.isQuickService && (
+              <View style={styles.quickServiceBadge}>
+                <Ionicons name="flash" size={14} color="#ffffff" />
+                <Text style={styles.quickServiceText}>Service Rapide</Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -823,12 +829,29 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 107, 53, 0.1)',
     padding: 15,
     borderRadius: 8,
+    flexWrap: 'wrap',
   },
   serviceTypeText: {
     fontSize: 16,
     fontWeight: 'bold',
     color: '#ff6b35',
     marginLeft: 10,
+    marginRight: 8,
+  },
+  quickServiceBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ff6b35',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    marginLeft: 8,
+  },
+  quickServiceText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#ffffff',
+    marginLeft: 4,
   },
   addressContainer: {
     gap: 15,

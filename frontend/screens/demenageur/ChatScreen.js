@@ -341,33 +341,38 @@ const ChatScreen = ({ userData }) => {
           showsVerticalScrollIndicator={false}
           onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
         >
-          {messages.map((message, index) => (
-            <Animated.View 
-              key={message.id || message._id || `msg-${index}`} 
-              style={[
-                styles.messageContainer,
-                message.senderType === 'demenageur' ? styles.messageRight : styles.messageLeft
-              ]}
-            >
-              <View style={[
-                styles.messageBubble,
-                message.senderType === 'demenageur' ? styles.messageBubbleRight : styles.messageBubbleLeft
-              ]}>
-                <Text style={[
-                  styles.messageText,
-                  message.senderType === 'demenageur' ? styles.messageTextRight : styles.messageTextLeft
+          {messages.map((message, index) => {
+            // Les messages du déménageur sont affichés à droite, les messages du client à gauche
+            const isDemenageurMessage = message.senderType === 'demenageur' || message.senderType === 'Demenageur';
+            
+            return (
+              <Animated.View 
+                key={message.id || message._id || `msg-${index}`} 
+                style={[
+                  styles.messageContainer,
+                  isDemenageurMessage ? styles.messageRight : styles.messageLeft
+                ]}
+              >
+                <View style={[
+                  styles.messageBubble,
+                  isDemenageurMessage ? styles.messageBubbleRight : styles.messageBubbleLeft
                 ]}>
-                  {message.content}
-                </Text>
-                <Text style={[
-                  styles.messageTime,
-                  message.senderType === 'demenageur' ? styles.messageTimeRight : styles.messageTimeLeft
-                ]}>
-                  {formatTime(message.createdAt)}
-                </Text>
-              </View>
-            </Animated.View>
-          ))}
+                  <Text style={[
+                    styles.messageText,
+                    isDemenageurMessage ? styles.messageTextRight : styles.messageTextLeft
+                  ]}>
+                    {message.content}
+                  </Text>
+                  <Text style={[
+                    styles.messageTime,
+                    isDemenageurMessage ? styles.messageTimeRight : styles.messageTimeLeft
+                  ]}>
+                    {formatTime(message.createdAt)}
+                  </Text>
+                </View>
+              </Animated.View>
+            );
+          })}
         </ScrollView>
 
         {/* Input de message avec design moderne */}

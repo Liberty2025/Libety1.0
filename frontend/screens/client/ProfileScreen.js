@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,8 @@ import {
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTutorialRefs } from '../../hooks/useTutorialRefs';
+import { useNavigationTutorial } from '../../hooks/useNavigationTutorial';
 
 const ProfileScreen = ({ userData, onLogout }) => {
   const [profile, setProfile] = useState(userData);
@@ -22,6 +24,20 @@ const ProfileScreen = ({ userData, onLogout }) => {
     newPassword: '',
     confirmPassword: ''
   });
+  
+  // Refs pour le tutoriel
+  const editButtonRef = useRef(null);
+  const changePasswordButtonRef = useRef(null);
+  const guideButtonRef = useRef(null);
+  
+  // Enregistrer les refs pour le tutoriel
+  const tutorialRefs = {
+    editButton: editButtonRef,
+    changePasswordButton: changePasswordButtonRef,
+    guideButton: guideButtonRef,
+  };
+  
+  useNavigationTutorial('Profil', tutorialRefs);
 
   useEffect(() => {
     setProfile(userData);
@@ -199,6 +215,7 @@ const ProfileScreen = ({ userData, onLogout }) => {
           </View>
         </View>
         <TouchableOpacity 
+          ref={editButtonRef}
           style={styles.editButton}
           onPress={isEditing ? handleSave : handleEdit}
         >
@@ -311,6 +328,7 @@ const ProfileScreen = ({ userData, onLogout }) => {
           <Text style={styles.sectionTitle}>Actions</Text>
           
           <TouchableOpacity 
+            ref={changePasswordButtonRef}
             style={styles.actionButton}
             onPress={() => setShowChangePassword(true)}
           >

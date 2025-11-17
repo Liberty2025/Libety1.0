@@ -174,6 +174,43 @@ const MissionScreen = ({ userData, navigation }) => {
     }
   };
 
+  const handleAcceptRequest = async (missionId) => {
+    try {
+      const API_BASE_URL = getAPIBaseURL();
+      const token = userData?.token;
+
+      // Accepter la demande en mettant le statut à 'accepted'
+      const response = await fetch(`${API_BASE_URL}/api/service-requests/${missionId}/status`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ status: 'accepted' }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        Alert.alert(
+          'Demande acceptée',
+          'Vous avez accepté cette demande. Vous pouvez maintenant proposer un prix.',
+          [
+            {
+              text: 'OK',
+              onPress: () => loadMissions() // Recharger les missions
+            }
+          ]
+        );
+      } else {
+        Alert.alert('Erreur', result.message || 'Erreur lors de l\'acceptation de la demande');
+      }
+    } catch (error) {
+      console.error('Erreur lors de l\'acceptation de la demande:', error);
+      Alert.alert('Erreur', 'Erreur de connexion');
+    }
+  };
+
   const handleAcceptNegotiation = async (missionId) => {
     try {
       const API_BASE_URL = getAPIBaseURL();
@@ -371,9 +408,17 @@ const MissionScreen = ({ userData, navigation }) => {
     >
       <View style={styles.missionHeader}>
         <View style={styles.missionInfo}>
-          <Text style={styles.serviceType}>
-            {mission.serviceType === 'demenagement' ? 'Déménagement' : 'Transport'}
-          </Text>
+          <View style={styles.serviceTypeRow}>
+            <Text style={styles.serviceType}>
+              {mission.serviceType === 'demenagement' ? 'Déménagement' : 'Transport'}
+            </Text>
+            {mission.serviceDetails?.isQuickService && (
+              <View style={styles.quickServiceBadge}>
+                <Ionicons name="flash" size={12} color="#ffffff" />
+                <Text style={styles.quickServiceText}>Service Rapide</Text>
+              </View>
+            )}
+          </View>
           <Text style={styles.clientName}>
             {mission.clientId?.first_name} {mission.clientId?.last_name}
           </Text>
@@ -420,24 +465,48 @@ const MissionScreen = ({ userData, navigation }) => {
         
       </View>
 
-      {/* Boutons d'action pour les négociations */}
-      {mission.priceNegotiation?.clientPrice && mission.status === 'pending' && (
+      {/* Boutons d'action pour les missions en attente */}
+      {mission.status === 'pending' && (
         <View style={styles.negotiationActions}>
-          <TouchableOpacity 
-            style={[styles.actionButton, styles.acceptButton]}
-            onPress={() => handleAcceptNegotiation(missionId)}
-          >
-            <Ionicons name="checkmark" size={16} color="#ffffff" />
-            <Text style={styles.actionButtonText}>Accepter</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity 
-            style={[styles.actionButton, styles.negotiateButton]}
-            onPress={() => handleNegotiate(missionId)}
-          >
-            <Ionicons name="swap-horizontal" size={16} color="#ffffff" />
-            <Text style={styles.actionButtonText}>Négocier</Text>
-          </TouchableOpacity>
+          {/* Si le client a négocié un prix, afficher les boutons Accepter/Négocier */}
+          {mission.priceNegotiation?.clientPrice ? (
+            <>
+              <TouchableOpacity 
+                style={[styles.actionButton, styles.acceptButton]}
+                onPress={() => handleAcceptNegotiation(missionId)}
+              >
+                <Ionicons name="checkmark" size={16} color="#ffffff" />
+                <Text style={styles.actionButtonText}>Accepter</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[styles.actionButton, styles.negotiateButton]}
+                onPress={() => handleNegotiate(missionId)}
+              >
+                <Ionicons name="swap-horizontal" size={16} color="#ffffff" />
+                <Text style={styles.actionButtonText}>Négocier</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            /* Si pas de négociation, afficher les boutons Accepter/Proposer prix */
+            <>
+              <TouchableOpacity 
+                style={[styles.actionButton, styles.acceptButton]}
+                onPress={() => handleAcceptRequest(missionId)}
+              >
+                <Ionicons name="checkmark" size={16} color="#ffffff" />
+                <Text style={styles.actionButtonText}>Accepter</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={[styles.actionButton, styles.negotiateButton]}
+                onPress={() => handleNegotiate(missionId)}
+              >
+                <Ionicons name="cash-outline" size={16} color="#ffffff" />
+                <Text style={styles.actionButtonText}>Proposer prix</Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       )}
 
@@ -741,11 +810,32 @@ const styles = StyleSheet.create({
   missionInfo: {
     flex: 1,
   },
+  serviceTypeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginBottom: 4,
+  },
   serviceType: {
     fontSize: 18,
     fontWeight: 'bold',
     color: '#333333',
-    marginBottom: 4,
+    marginRight: 8,
+  },
+  quickServiceBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ff6b35',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginLeft: 4,
+  },
+  quickServiceText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#ffffff',
+    marginLeft: 4,
   },
   clientName: {
     fontSize: 14,

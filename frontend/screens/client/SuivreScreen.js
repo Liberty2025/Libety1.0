@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import useWebSocket from '../../hooks/useWebSocket';
 import { getAPIBaseURL } from '../../config/api';
+import { ClientNotificationContext } from '../../components/ClientNotificationProvider';
+import { useTutorialRefs } from '../../hooks/useTutorialRefs';
+import { useNavigationTutorial } from '../../hooks/useNavigationTutorial';
 
 const SuivreScreen = ({ userData, navigation }) => {
   const [serviceRequests, setServiceRequests] = useState([]);
@@ -23,9 +26,13 @@ const SuivreScreen = ({ userData, navigation }) => {
   const [showNegotiateModal, setShowNegotiateModal] = useState(false);
   const [selectedRequestId, setSelectedRequestId] = useState(null);
   const [clientPrice, setClientPrice] = useState('');
+  const [showDetailsScreen, setShowDetailsScreen] = useState(false);
+  const [selectedRequestDetails, setSelectedRequestDetails] = useState(null);
   
   // WebSocket hook
   const { isConnected, lastUpdate, onEvent, offEvent } = useWebSocket(userData);
+  const notificationContext = useContext(ClientNotificationContext);
+  const markPriceProposalHandled = notificationContext?.markPriceProposalHandled;
 
   useEffect(() => {
     if (userData) {
@@ -123,26 +130,38 @@ const SuivreScreen = ({ userData, navigation }) => {
       if (result.success) {
         // Transformer les données pour correspondre au format attendu par le frontend
         const transformedRequests = result.serviceRequests.map(req => ({
-          _id: req.id,
-          serviceType: req.service_type,
-          departureAddress: req.departure_address,
-          destinationAddress: req.destination_address,
-          scheduledDate: req.scheduled_date,
-          proposedPrice: req.proposed_price,
+          _id: req.id || req._id,
+          serviceType: req.serviceType || req.service_type,
+          departureAddress: req.departureAddress || req.departure_address,
+          destinationAddress: req.destinationAddress || req.destination_address,
+          scheduledDate: req.scheduledDate || req.scheduled_date,
+          proposedPrice: req.proposedPrice || req.proposed_price || null,
           status: req.status,
-          createdAt: req.created_at,
-          demenageurId: {
-            _id: req.demenageur_id,
-            first_name: req.demenageur_first_name,
-            last_name: req.demenageur_last_name,
-            email: req.demenageur_email,
-            phone: req.demenageur_phone
-          },
-          priceNegotiation: req.price_negotiation ? (typeof req.price_negotiation === 'string' ? JSON.parse(req.price_negotiation) : req.price_negotiation) : null,
-          serviceDetails: req.service_details ? (typeof req.service_details === 'string' ? JSON.parse(req.service_details) : req.service_details) : null
+          createdAt: req.createdAt || req.created_at,
+          demenageurId: req.demenageurId || (req.mover_id ? {
+            _id: req.mover_id,
+            id: req.mover_id,
+            first_name: req.demenageur_first_name || req.firstName,
+            last_name: req.demenageur_last_name || req.lastName,
+            firstName: req.firstName || req.demenageur_first_name,
+            lastName: req.lastName || req.demenageur_last_name,
+            email: req.demenageur_email || req.email,
+            phone: req.demenageur_phone || req.phone
+          } : null),
+          priceNegotiation: req.priceNegotiation || (req.price_negotiation ? (typeof req.price_negotiation === 'string' ? JSON.parse(req.price_negotiation) : req.price_negotiation) : null),
+          serviceDetails: req.serviceDetails || (req.service_details ? (typeof req.service_details === 'string' ? JSON.parse(req.service_details) : req.service_details) : null)
         }));
         
         console.log('✅ Demandes chargées:', transformedRequests.length);
+        // Debug: Vérifier les prix proposés
+        transformedRequests.forEach((req, index) => {
+          console.log(`Demande ${index + 1}:`, {
+            id: req._id,
+            proposedPrice: req.proposedPrice,
+            status: req.status,
+            hasDemenageur: !!req.demenageurId
+          });
+        });
         setServiceRequests(transformedRequests);
       } else {
         console.error('❌ Erreur dans la réponse:', result.message);
@@ -191,6 +210,10 @@ const SuivreScreen = ({ userData, navigation }) => {
             }
           ]
         );
+
+        if (markPriceProposalHandled) {
+          markPriceProposalHandled(requestId);
+        }
       } else {
         Alert.alert('Erreur', result.message || 'Erreur lors de l\'acceptation du prix');
       }
@@ -201,6 +224,20 @@ const SuivreScreen = ({ userData, navigation }) => {
   };
 
   const scrollViewRef = useRef(null);
+  
+  // Refs pour le tutoriel
+  const requestsListRef = useRef(null);
+  const negotiateButtonRef = useRef(null);
+  const detailsButtonRef = useRef(null);
+  
+  // Enregistrer les refs pour le tutoriel
+  const tutorialRefs = {
+    requestsList: requestsListRef,
+    negotiateButton: negotiateButtonRef,
+    detailsButton: detailsButtonRef,
+  };
+  
+  useNavigationTutorial('Suivre', tutorialRefs);
 
   const handleNegotiatePrice = (requestId) => {
     setSelectedRequestId(requestId);
@@ -241,6 +278,10 @@ const SuivreScreen = ({ userData, navigation }) => {
             }
           ]
         );
+
+        if (markPriceProposalHandled) {
+          markPriceProposalHandled(selectedRequestId);
+        }
       } else {
         Alert.alert('Erreur', result.message || 'Erreur lors de l\'envoi de la négociation');
       }
@@ -248,6 +289,16 @@ const SuivreScreen = ({ userData, navigation }) => {
       console.error('Erreur lors de la négociation:', error);
       Alert.alert('Erreur', 'Erreur de connexion');
     }
+  };
+
+  const handleOpenDetails = (request) => {
+    setSelectedRequestDetails(request);
+    setShowDetailsScreen(true);
+  };
+
+  const handleCloseDetails = () => {
+    setShowDetailsScreen(false);
+    setSelectedRequestDetails(null);
   };
 
   const getStatusColor = (status) => {
@@ -282,6 +333,103 @@ const SuivreScreen = ({ userData, navigation }) => {
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const humanizeLabel = (label) => {
+    if (!label) return '';
+
+    const map = {
+      notes: 'Notes',
+      hasElevator: 'Ascenseur',
+      serviceType: 'Type de service',
+      propertyType: 'Type de propriété',
+      floor: 'Étage',
+      volume: 'Volume',
+      distance: 'Distance',
+      buildingAccess: 'Accessibilité du bâtiment',
+      packing: 'Embouteillage',
+      fragileItems: 'Articles fragiles',
+      chambres: 'Chambres',
+    };
+
+    if (map[label]) {
+      return map[label];
+    }
+
+    return label
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/_/g, ' ')
+      .replace(/^./, (char) => char.toUpperCase());
+  };
+
+  const formatDetailValue = (value) => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'string') return value.trim();
+    if (typeof value === 'number') return `${value}`;
+    if (typeof value === 'boolean') return value ? 'Oui' : 'Non';
+
+    if (Array.isArray(value)) {
+      const nested = value
+        .map((item) => formatDetailValue(item))
+        .filter((item) => item && item.length > 0);
+      return nested.length > 0
+        ? nested.map((entry) => `• ${entry.replace(/\n/g, '\n  ')}`).join('\n')
+        : '';
+    }
+
+    if (typeof value === 'object') {
+      const entries = Object.entries(value)
+        .map(([key, val]) => {
+          const formatted = formatDetailValue(val);
+          if (!formatted) return null;
+          return `${humanizeLabel(key)} : ${formatted}`;
+        })
+        .filter(Boolean);
+      return entries.length > 0 ? entries.join('\n') : '';
+    }
+
+    return `${value}`;
+  };
+
+  const renderServiceDetails = (details) => {
+    if (!details) return null;
+
+    const normalizedDetails =
+      typeof details === 'string'
+        ? (() => {
+            try {
+              return JSON.parse(details);
+            } catch (error) {
+              return details;
+            }
+          })()
+        : details;
+
+    if (typeof normalizedDetails === 'string') {
+      return (
+        <Text style={styles.detailsValue}>{normalizedDetails}</Text>
+      );
+    }
+
+    if (typeof normalizedDetails !== 'object' || normalizedDetails === null) {
+      return null;
+    }
+
+    return Object.entries(normalizedDetails)
+      .map(([key, value]) => {
+        const formattedValue = formatDetailValue(value);
+        if (!formattedValue) {
+          return null;
+        }
+
+        return (
+          <View key={key} style={styles.detailsListItem}>
+            <Text style={styles.detailsListLabel}>{humanizeLabel(key)}</Text>
+            <Text style={styles.detailsListValue}>{formattedValue}</Text>
+          </View>
+        );
+      })
+      .filter(Boolean);
   };
 
   // Composant animé pour le badge "En cours"
@@ -323,55 +471,70 @@ const SuivreScreen = ({ userData, navigation }) => {
 
   const renderServiceRequest = (request) => (
     <View key={request._id} style={styles.requestCard}>
-      <View style={styles.requestHeader}>
-        <View style={styles.requestInfo}>
-          <Text style={styles.serviceType}>
-            {request.serviceType === 'demenagement' ? 'Déménagement' : 'Transport'}
-          </Text>
-          <Text style={styles.demenageurName}>
-            {request.demenageurId?.first_name} {request.demenageurId?.last_name}
-          </Text>
+      <TouchableOpacity
+        ref={request === serviceRequests[0] ? detailsButtonRef : null}
+        activeOpacity={0.85}
+        onPress={() => handleOpenDetails(request)}
+        style={styles.cardTouchableArea}
+      >
+        <View style={styles.requestHeader}>
+          <View style={styles.requestInfo}>
+            <Text style={styles.serviceType}>
+              {request.serviceType === 'demenagement' ? 'Déménagement' : 'Transport'}
+            </Text>
+            <Text style={styles.demenageurName}>
+              {request.demenageurId?.first_name || request.demenageurId?.firstName 
+                ? `${request.demenageurId?.first_name || request.demenageurId?.firstName} ${request.demenageurId?.last_name || request.demenageurId?.lastName || ''}`.trim()
+                : 'Non défini'}
+            </Text>
+          </View>
         </View>
-      </View>
 
-      <View style={styles.requestDetails}>
-        <View style={styles.detailRow}>
-          <Ionicons name="location-outline" size={16} color="#ff6b35" />
-          <Text style={styles.detailText}>{request.departureAddress}</Text>
-        </View>
-        
-        <View style={styles.detailRow}>
-          <Ionicons name="flag-outline" size={16} color="#ff6b35" />
-          <Text style={styles.detailText}>{request.destinationAddress}</Text>
-        </View>
-        
-        <View style={styles.detailRow}>
-          <Ionicons name="calendar-outline" size={16} color="#ff6b35" />
-          <Text style={styles.detailText}>{formatDate(request.scheduledDate)}</Text>
-        </View>
-        
-        {/* Affichage du prix proposé ou en négociation */}
-        {request.proposedPrice && (
+        <View style={styles.requestDetails}>
           <View style={styles.detailRow}>
-            <Ionicons name="cash-outline" size={16} color="#ff6b35" />
+            <Ionicons name="location-outline" size={16} color="#ff6b35" />
             <Text style={styles.detailText}>
-              Prix proposé: {request.proposedPrice} TND
+              {request.departureAddress || request.from_address || 'Non défini'}
             </Text>
           </View>
-        )}
-        
-        {request.priceNegotiation?.clientPrice && (
+          
           <View style={styles.detailRow}>
-            <Ionicons name="swap-horizontal-outline" size={16} color="#ff6b35" />
+            <Ionicons name="flag-outline" size={16} color="#ff6b35" />
             <Text style={styles.detailText}>
-              Votre prix: {request.priceNegotiation.clientPrice} TND
+              {request.destinationAddress || request.to_address || 'Non défini'}
             </Text>
           </View>
-        )}
-      </View>
+          
+          <View style={styles.detailRow}>
+            <Ionicons name="calendar-outline" size={16} color="#ff6b35" />
+            <Text style={styles.detailText}>
+              {request.scheduledDate || request.move_date ? formatDate(request.scheduledDate || request.move_date) : 'Non défini'}
+            </Text>
+          </View>
+          
+          {/* Affichage du prix proposé ou en négociation */}
+          {(request.proposedPrice || request.proposedPrice === 0) && (
+            <View style={styles.detailRow}>
+              <Ionicons name="cash-outline" size={16} color="#ff6b35" />
+              <Text style={styles.detailText}>
+                Prix proposé: {request.proposedPrice} TND
+              </Text>
+            </View>
+          )}
+          
+          {request.priceNegotiation?.clientPrice && (
+            <View style={styles.detailRow}>
+              <Ionicons name="swap-horizontal-outline" size={16} color="#ff6b35" />
+              <Text style={styles.detailText}>
+                Votre prix: {request.priceNegotiation.clientPrice} TND
+              </Text>
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
 
       {/* Boutons d'action pour les propositions de prix */}
-      {request.proposedPrice && request.status === 'pending' && (
+      {(request.proposedPrice || request.proposedPrice === 0) && request.status === 'pending' && (
         <View style={styles.priceActions}>
           <TouchableOpacity 
             style={[styles.actionButton, styles.acceptButton]}
@@ -382,6 +545,7 @@ const SuivreScreen = ({ userData, navigation }) => {
           </TouchableOpacity>
           
           <TouchableOpacity 
+            ref={request === serviceRequests[0] ? negotiateButtonRef : null}
             style={[styles.actionButton, styles.negotiateButton]}
             onPress={() => handleNegotiatePrice(request._id)}
           >
@@ -394,7 +558,9 @@ const SuivreScreen = ({ userData, navigation }) => {
       <View style={styles.requestFooter}>
         <View style={styles.footerLeft}>
           <Text style={styles.requestDate}>
-            Demande du {formatDate(request.createdAt)}
+            Demande du {request.demenageurId?.first_name || request.demenageurId?.firstName 
+              ? `${request.demenageurId?.first_name || request.demenageurId?.firstName} ${request.demenageurId?.last_name || request.demenageurId?.lastName || ''}`.trim()
+              : 'Non défini'}
           </Text>
           <AnimatedStatusBadge 
             status={request.status} 
@@ -423,10 +589,85 @@ const SuivreScreen = ({ userData, navigation }) => {
     );
   }
 
+  if (showDetailsScreen && selectedRequestDetails) {
+    return (
+      <View style={styles.detailsScreenContainer}>
+        <View style={styles.detailsScreenHeader}>
+          <TouchableOpacity style={styles.detailsScreenBackButton} onPress={handleCloseDetails}>
+            <Ionicons name="arrow-back" size={22} color="#ffffff" />
+          </TouchableOpacity>
+          <Text style={styles.detailsScreenTitle}>Détails de la demande</Text>
+        </View>
+
+        <ScrollView contentContainerStyle={styles.detailsScreenContent} showsVerticalScrollIndicator={false}>
+          <View style={styles.detailsCard}>
+            <Text style={styles.detailsLabel}>Type de service</Text>
+            <Text style={styles.detailsValue}>
+              {selectedRequestDetails.serviceType === 'demenagement' ? 'Déménagement' : 'Transport'}
+            </Text>
+
+            <Text style={styles.detailsLabel}>Déménageur</Text>
+            <Text style={styles.detailsValue}>
+              {selectedRequestDetails.demenageurId?.first_name} {selectedRequestDetails.demenageurId?.last_name}
+            </Text>
+          </View>
+
+          <View style={styles.detailsCard}>
+            <Text style={styles.detailsLabel}>Adresse de départ</Text>
+            <Text style={styles.detailsValue}>{selectedRequestDetails.departureAddress}</Text>
+
+            <Text style={styles.detailsLabel}>Adresse d'arrivée</Text>
+            <Text style={styles.detailsValue}>{selectedRequestDetails.destinationAddress}</Text>
+
+            <Text style={styles.detailsLabel}>Date planifiée</Text>
+            <Text style={styles.detailsValue}>{formatDate(selectedRequestDetails.scheduledDate)}</Text>
+          </View>
+
+          <View style={styles.detailsCard}>
+            <Text style={styles.detailsLabel}>Statut</Text>
+            <Text style={styles.detailsValue}>{getStatusText(selectedRequestDetails.status)}</Text>
+
+            {selectedRequestDetails.proposedPrice && (
+              <>
+                <Text style={styles.detailsLabel}>Prix proposé</Text>
+                <Text style={styles.detailsValue}>{selectedRequestDetails.proposedPrice} TND</Text>
+              </>
+            )}
+
+            {selectedRequestDetails.priceNegotiation?.clientPrice && (
+              <>
+                <Text style={styles.detailsLabel}>Votre proposition</Text>
+                <Text style={styles.detailsValue}>{selectedRequestDetails.priceNegotiation.clientPrice} TND</Text>
+              </>
+            )}
+          </View>
+
+          {selectedRequestDetails.serviceDetails && (
+            <View style={styles.detailsCard}>
+              <Text style={styles.detailsLabel}>Détails supplémentaires</Text>
+              <View style={styles.detailsList}>
+                {renderServiceDetails(selectedRequestDetails.serviceDetails) || (
+                  <Text style={styles.detailsValue}>Aucune information supplémentaire</Text>
+                )}
+              </View>
+            </View>
+          )}
+
+          <TouchableOpacity style={styles.closeDetailsButton} onPress={handleCloseDetails}>
+            <Text style={styles.closeDetailsText}>Retour</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <ScrollView 
-        ref={scrollViewRef}
+        ref={(ref) => {
+          scrollViewRef.current = ref;
+          requestsListRef.current = ref;
+        }}
         style={styles.content}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
@@ -485,6 +726,7 @@ const SuivreScreen = ({ userData, navigation }) => {
           </View>
         </View>
       </Modal>
+
     </View>
   );
 };
@@ -541,6 +783,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 3.84,
     elevation: 5,
+  },
+  cardTouchableArea: {
+    marginBottom: 12,
   },
   requestHeader: {
     flexDirection: 'row',
@@ -712,6 +957,142 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  // Styles pour le modal de détails
+  detailsModalContent: {
+    backgroundColor: '#1a0d2e',
+    borderRadius: 24,
+    padding: 0,
+    width: '92%',
+    maxWidth: 460,
+    overflow: 'hidden',
+  },
+  detailsTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#ffffff',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  detailsSection: {
+    gap: 12,
+    marginBottom: 24,
+  },
+  detailsHeader: {
+    paddingVertical: 24,
+    paddingHorizontal: 24,
+    backgroundColor: 'rgba(255, 107, 53, 0.9)',
+    shadowColor: '#ff6b35',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  detailsHeaderSubtitle: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  detailsBody: {
+    paddingHorizontal: 24,
+    paddingVertical: 24,
+    gap: 18,
+  },
+  detailsCard: {
+    backgroundColor: '#241536',
+    borderRadius: 16,
+    padding: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 107, 53, 0.2)',
+  },
+  detailsLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: 'rgba(255, 255, 255, 0.7)',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  detailsValue: {
+    fontSize: 16,
+    color: '#ffffff',
+    lineHeight: 22,
+  },
+  detailsList: {
+    marginTop: 14,
+    gap: 14,
+  },
+  detailsListItem: {
+    backgroundColor: '#2e1f45',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  detailsListLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#ff9a70',
+    marginBottom: 6,
+  },
+  detailsListValue: {
+    fontSize: 14,
+    color: '#f0e6ff',
+    lineHeight: 20,
+  },
+  closeDetailsButton: {
+    backgroundColor: 'rgba(255, 107, 53, 0.95)',
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: 'center',
+    marginHorizontal: 24,
+    marginBottom: 20,
+    shadowColor: '#ff6b35',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  closeDetailsText: {
+    color: '#ffffff',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  // New styles for details screen
+  detailsScreenContainer: {
+    flex: 1,
+    backgroundColor: '#120824',
+  },
+  detailsScreenHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingTop: 50,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
+    backgroundColor: '#1e0f33',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 107, 53, 0.3)',
+  },
+  detailsScreenBackButton: {
+    backgroundColor: 'rgba(255, 107, 53, 0.15)',
+    borderRadius: 30,
+    padding: 10,
+    marginRight: 16,
+  },
+  detailsScreenTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#ffffff',
+  },
+  detailsScreenContent: {
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+    gap: 20,
+    paddingBottom: 60,
   },
 });
 

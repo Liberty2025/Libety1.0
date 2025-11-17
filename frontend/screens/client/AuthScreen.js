@@ -66,12 +66,15 @@ const AuthScreen = ({ onAuthSuccess, onBack }) => {
       // Utiliser la configuration API centralisée
       let API_BASE_URL = getAPIBaseURL();
       
-      // Tester la connectivité si on est en développement (optionnel, pour éviter les erreurs réseau)
-      // On peut désactiver ce test pour accélérer, car getAPIBaseURL() retourne déjà la bonne URL
-      // const workingURL = await testAPIConnectivity();
-      // if (workingURL) {
-      //   API_BASE_URL = workingURL;
-      // }
+      // Tester la connectivité pour trouver une URL qui fonctionne
+      console.log('🔍 Test de connectivité API...');
+      const workingURL = await testAPIConnectivity();
+      if (workingURL) {
+        API_BASE_URL = workingURL;
+        console.log('✅ URL API fonctionnelle trouvée:', API_BASE_URL);
+      } else {
+        console.log('⚠️ Utilisation de l\'URL par défaut:', API_BASE_URL);
+      }
       
       console.log('🌐 URL API utilisée:', API_BASE_URL);
 

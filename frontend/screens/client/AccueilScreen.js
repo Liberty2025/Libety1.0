@@ -6,9 +6,12 @@ import * as Location from 'expo-location';
 import { useLocale } from '../../context/LocaleContext';
 import { generateMapHTML, sortDemenageursByDistance } from '../../utils/mapUtils';
 import ReservationForm from '../../components/ReservationForm';
+import ServiceTypeSelectionScreen from '../../components/ServiceTypeSelectionScreen';
+import QuickTransportForm from '../../components/QuickTransportForm';
 import { getAPIBaseURL } from '../../config/api';
-
-const API_BASE_URL = getAPIBaseURL();
+import { useTutorialRefs } from '../../hooks/useTutorialRefs';
+import { useTutorial } from '../../context/TutorialContext';
+import { useNavigationTutorial } from '../../hooks/useNavigationTutorial';
 
 // Composant pour afficher un déménageur dans la liste
 const DemenageurItem = ({ demenageur, onSelect, t, styles }) => {
@@ -64,19 +67,45 @@ const DemenageurItem = ({ demenageur, onSelect, t, styles }) => {
 
 const AccueilScreen = ({ authToken }) => {
   const { t } = useLocale();
+  const { registerRef, unregisterRef } = useTutorialRefs();
+  const { startTutorial, currentPage, showTutorial } = useTutorial();
   const [location, setLocation] = useState(null);
   const [demenageurs, setDemenageurs] = useState([]);
   const [sortedDemenageurs, setSortedDemenageurs] = useState([]);
+  
+  // Logger l'URL de l'API au montage du composant
+  useEffect(() => {
+    console.log('🏠 AccueilScreen monté - API_BASE_URL:', getAPIBaseURL());
+  }, []);
   const [errorMsg, setErrorMsg] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showList, setShowList] = useState(true);
   const [isMapTouched, setIsMapTouched] = useState(false);
   const [selectedDemenageur, setSelectedDemenageur] = useState(null);
+  const [showServiceTypeSelection, setShowServiceTypeSelection] = useState(false);
   const [showReservationForm, setShowReservationForm] = useState(false);
+  const [showQuickTransportForm, setShowQuickTransportForm] = useState(false);
   const [serviceType, setServiceType] = useState('demenagement');
+  const [mapHTML, setMapHTML] = useState(''); // Mémoriser le HTML de la carte
+  const loadDemenageursRef = useRef(null); // Ref pour la fonction de chargement
   
   const translateY = useRef(new Animated.Value(0)).current;
   const listHeight = useRef(300).current;
+  
+  // Refs pour les éléments à expliquer
+  const quickTransportButtonRef = useRef(null);
+  const showListButtonRef = useRef(null);
+  const demenageurListRef = useRef(null);
+  const tabBarRef = useRef(null);
+
+  // Enregistrer les refs pour le tutoriel
+  const tutorialRefs = {
+    quickTransportButton: quickTransportButtonRef,
+    demenageurList: demenageurListRef,
+    showListButton: showListButtonRef,
+  };
+
+  useNavigationTutorial('Accueil', tutorialRefs);
   
   const panResponder = useRef(
     PanResponder.create({
@@ -107,43 +136,277 @@ const AccueilScreen = ({ authToken }) => {
     })
   ).current;
 
+  // Définir loadDemenageurs avant de l'utiliser dans useEffect
+  const loadDemenageurs = React.useCallback(async (silent = false) => {
+    try {
+      // Obtenir l'URL de l'API dynamiquement
+      const API_BASE_URL = getAPIBaseURL();
+      const apiUrl = `${API_BASE_URL}/api/demenageurs`;
+      // TOUJOURS logger l'URL et l'état, même en mode silencieux pour le débogage
+      console.log(`🔄 [${silent ? 'SILENT' : 'NORMAL'}] Chargement des déménageurs depuis:`, apiUrl);
+      console.log('🌐 API_BASE_URL:', API_BASE_URL);
+      
+      // Ajouter un timeout pour éviter que la requête reste bloquée
+      console.log('📡 Envoi de la requête fetch...');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.warn('⏱️ Timeout de la requête après 15 secondes');
+        controller.abort();
+      }, 15000); // Timeout de 15 secondes
+      
+      let response;
+      try {
+        response = await fetch(apiUrl, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Timeout: La requête a pris trop de temps');
+        }
+        throw fetchError;
+      }
+      
+      console.log('📡 Réponse reçue - Status:', response?.status, 'OK:', response?.ok, 'Type:', response?.type);
+      
+      if (response && response.ok) {
+        const data = await response.json();
+        console.log('✅ Réponse API reçue (RAW):', JSON.stringify(data, null, 2));
+        console.log('✅ Réponse API reçue:', {
+          success: data.success,
+          count: data.count,
+          dataLength: data.data?.length || 0,
+          hasData: !!data.data,
+          dataType: Array.isArray(data.data) ? 'array' : typeof data.data,
+          firstItem: data.data?.[0] ? {
+            id: data.data[0].id,
+            name: `${data.data[0].first_name} ${data.data[0].last_name}`,
+            hasLat: !!data.data[0].latitude,
+            hasLng: !!data.data[0].longitude,
+            hasLocation: !!data.data[0].location
+          } : null
+        });
+        
+        if (data.success && data.data && Array.isArray(data.data) && data.data.length > 0) {
+          // Normaliser les données pour s'assurer que latitude/longitude sont disponibles
+          const normalizedDemenageurs = data.data.map(d => {
+            // Extraire les coordonnées de différentes sources possibles
+            const lat = d.latitude || d.location?.lat || (d.location && parseFloat(d.location.lat));
+            const lng = d.longitude || d.location?.lng || (d.location && parseFloat(d.location.lng));
+            
+            return {
+              ...d,
+              latitude: lat ? parseFloat(lat) : null,
+              longitude: lng ? parseFloat(lng) : null,
+              location: d.location || (lat && lng ? { lat: parseFloat(lat), lng: parseFloat(lng) } : null)
+            };
+          });
+          
+          console.log('📍 Déménageurs normalisés:', normalizedDemenageurs.length);
+          console.log('📍 Déménageurs avec coordonnées:', normalizedDemenageurs.filter(d => d.latitude && d.longitude).length);
+          console.log('📍 Détails des déménageurs normalisés:', normalizedDemenageurs.map(d => ({
+            id: d.id,
+            name: `${d.first_name} ${d.last_name}`,
+            lat: d.latitude,
+            lng: d.longitude
+          })));
+          
+          // Afficher TOUS les déménageurs, même sans coordonnées
+          // (ceux sans coordonnées ne seront pas sur la carte mais seront dans la liste)
+          setDemenageurs(normalizedDemenageurs);
+          // Le tri par distance sera fait dans un useEffect séparé quand location sera disponible
+          setSortedDemenageurs(normalizedDemenageurs);
+          setErrorMsg(null); // Effacer les erreurs précédentes
+          
+          console.log('✅ Liste des déménageurs mise à jour:', normalizedDemenageurs.length, 'déménageurs');
+          console.log('✅ sortedDemenageurs sera mis à jour avec:', normalizedDemenageurs.length, 'éléments');
+        } else {
+          console.warn('⚠️ Aucun déménageur disponible dans la réponse:', {
+            success: data.success,
+            hasData: !!data.data,
+            isArray: Array.isArray(data.data),
+            length: data.data?.length || 0,
+            fullData: JSON.stringify(data, null, 2)
+          });
+          setDemenageurs([]);
+          setSortedDemenageurs([]);
+        }
+      } else {
+        const errorText = await response.text().catch(() => 'Erreur inconnue');
+        console.error('❌ Erreur HTTP:', response?.status, response?.statusText, errorText);
+        throw new Error(`Erreur HTTP: ${response?.status} - ${errorText}`);
+      }
+    } catch (error) {
+      // TOUJOURS logger les erreurs, même en mode silencieux
+      console.error('❌ Erreur de connexion API:', error);
+      console.error('❌ Détails de l\'erreur:', {
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
+        apiUrl: `${getAPIBaseURL()}/api/demenageurs`
+      });
+      
+      // Ne pas afficher d'erreur si on a déjà des déménageurs chargés
+      // La liste sera mise à jour au prochain polling
+      setDemenageurs(currentDemenageurs => {
+        if (currentDemenageurs.length === 0 && !silent) {
+          setErrorMsg(`Connexion en cours... Réessai automatique...`);
+        } else {
+          // Conserver la liste existante, elle sera mise à jour au prochain polling
+          console.log('⚠️ Erreur mais liste déjà chargée, conservation des données');
+        }
+        return currentDemenageurs; // Conserver la liste existante
+      });
+    }
+  }, []); // Pas de dépendances pour éviter les re-renders
+  
+  // Mettre à jour la ref quand la fonction change
+  useEffect(() => {
+    loadDemenageursRef.current = loadDemenageurs;
+  }, [loadDemenageurs]);
+
+  // Système de polling en temps réel - mise à jour automatique toutes les 10 secondes
+  useEffect(() => {
+    console.log('🚀 Initialisation du système de polling des déménageurs');
+    // Chargement initial
+    console.log('📥 Chargement initial des déménageurs...');
+    loadDemenageurs(false);
+    
+    // Mise à jour automatique toutes les 10 secondes
+    const intervalId = setInterval(() => {
+      console.log('🔄 Mise à jour automatique de la liste des déménageurs...');
+      loadDemenageurs(true); // Chargement silencieux pour les mises à jour
+    }, 10000); // Toutes les 10 secondes
+    
+    return () => {
+      console.log('🛑 Arrêt du système de polling');
+      clearInterval(intervalId);
+    };
+  }, [loadDemenageurs]);
+
   useEffect(() => {
     (async () => {
       try {
-        let { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
+        // Charger la position GPS
+        const [locationPermission] = await Promise.all([
+          Location.requestForegroundPermissionsAsync(),
+        ]);
+
+        if (locationPermission.status !== 'granted') {
           setErrorMsg(t('location_permission_denied'));
           Alert.alert(
             t('error_permission_required'),
             t('error_location_required'),
             [{ text: 'OK' }]
           );
+          // Continuer même sans permission de localisation
+          setLoading(false);
           return;
         }
 
-        let userLocation = await Location.getCurrentPositionAsync({});
+        // Obtenir la position avec un timeout pour éviter d'attendre trop longtemps
+        const locationPromise = Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced, // Utiliser Balanced au lieu de Best pour être plus rapide
+          timeout: 10000, // Timeout de 10 secondes
+        });
+
+        const userLocation = await locationPromise;
         setLocation(userLocation);
-        await loadDemenageurs();
         
       } catch (error) {
         console.error('Erreur:', error);
         setErrorMsg(t('error_loading_data'));
+        // Continuer même en cas d'erreur de localisation
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [loadDemenageurs]);
 
   useEffect(() => {
+    console.log('🔄 useEffect tri déménageurs - location:', !!location, 'demenageurs.length:', demenageurs.length);
+    
     if (location && location.coords && demenageurs.length > 0) {
+      // Trier seulement les déménageurs qui ont des coordonnées
+      const demenageursWithCoords = demenageurs.filter(d => 
+        d.latitude && d.longitude && 
+        !isNaN(parseFloat(d.latitude)) && 
+        !isNaN(parseFloat(d.longitude))
+      );
+      
+      const demenageursWithoutCoords = demenageurs.filter(d => 
+        !d.latitude || !d.longitude || 
+        isNaN(parseFloat(d.latitude)) || 
+        isNaN(parseFloat(d.longitude))
+      );
+      
+      console.log('📍 Déménageurs avec coordonnées:', demenageursWithCoords.length);
+      console.log('📍 Déménageurs sans coordonnées:', demenageursWithoutCoords.length);
+      
+      // Trier ceux avec coordonnées par distance
       const sorted = sortDemenageursByDistance(
-        demenageurs, 
+        demenageursWithCoords, 
         location.coords.latitude, 
         location.coords.longitude
       );
-      setSortedDemenageurs(sorted);
+      
+      // Ajouter ceux sans coordonnées à la fin
+      const finalSorted = [...sorted, ...demenageursWithoutCoords];
+      console.log('✅ sortedDemenageurs mis à jour avec', finalSorted.length, 'éléments');
+      setSortedDemenageurs(finalSorted);
+    } else if (demenageurs.length > 0) {
+      // Si pas de localisation, afficher tous les déménageurs dans l'ordre reçu
+      console.log('✅ Pas de localisation, affichage de tous les déménageurs:', demenageurs.length);
+      setSortedDemenageurs(demenageurs);
+    } else {
+      console.log('⚠️ Aucun déménageur à trier');
     }
   }, [location, demenageurs]);
+
+  // Calculer les coordonnées de la carte (position par défaut si pas de localisation)
+  const defaultLat = 36.8065;
+  const defaultLng = 10.1815;
+  const mapLat = location?.coords?.latitude || defaultLat;
+  const mapLng = location?.coords?.longitude || defaultLng;
+
+  // Générer le HTML de la carte seulement quand les données changent
+  useEffect(() => {
+    if (mapLat && mapLng) {
+      const html = generateMapHTML(mapLat, mapLng, demenageurs);
+      setMapHTML(html);
+    }
+  }, [mapLat, mapLng, demenageurs.length]);
+
+  // Démarrer le tutoriel quand l'écran Accueil est monté (client authentifié)
+  const tutorialStartedRef = useRef(false);
+  useEffect(() => {
+    // Démarrer le tutoriel seulement une fois par session
+    if (!tutorialStartedRef.current) {
+      tutorialStartedRef.current = true;
+      // Attendre un peu pour que l'écran soit complètement chargé
+      const timer = setTimeout(() => {
+        console.log('🎓 Démarrage du tutoriel depuis AccueilScreen');
+        // Forcer l'affichage de la liste pendant le tutoriel
+        setShowList(true);
+        startTutorial('Accueil');
+      }, 2000); // Attendre 2 secondes pour que tout soit chargé
+      
+      return () => clearTimeout(timer);
+    }
+  }, []); // Seulement au montage de l'écran
+  
+  // Forcer l'affichage de la liste quand le tutoriel est actif sur cette page
+  useEffect(() => {
+    if (showTutorial && currentPage === 'Accueil') {
+      setShowList(true);
+    }
+  }, [showTutorial, currentPage]);
 
   const hideList = () => {
     Animated.timing(translateY, {
@@ -224,7 +487,7 @@ const AccueilScreen = ({ authToken }) => {
         scheduledDate: scheduledDate
       };
 
-      const response = await fetch(`${API_BASE_URL}/api/service-requests/create`, {
+      const response = await fetch(`${getAPIBaseURL()}/api/service-requests/create`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${authToken}`,
@@ -258,87 +521,102 @@ const AccueilScreen = ({ authToken }) => {
     }
   };
 
-  const loadDemenageurs = async () => {
+  const handleQuickTransportSubmit = async (formData) => {
     try {
-      console.log(`🌐 Tentative de connexion à: ${API_BASE_URL}/api/demenageurs`);
-      
-      const response = await fetch(`${API_BASE_URL}/api/demenageurs`, {
+      // Récupérer tous les déménageurs disponibles
+      const response = await fetch(`${getAPIBaseURL()}/api/demenageurs`, {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
         },
       });
-      
-      console.log(`📥 Réponse reçue: ${response.status} ${response.statusText}`);
-      
-      if (response && response.ok) {
-        const data = await response.json();
-        console.log(`📋 Données reçues:`, {
-          success: data.success,
-          count: data.count,
-          dataLength: data.data?.length
+
+      if (!response.ok) {
+        throw new Error('Erreur lors de la récupération des déménageurs');
+      }
+
+      const data = await response.json();
+      const allDemenageurs = data.success && data.data ? data.data : [];
+
+      if (allDemenageurs.length === 0) {
+        Alert.alert('Aucun déménageur', 'Aucun déménageur disponible pour le moment');
+        return;
+      }
+
+      // Date par défaut (demain à 9h)
+      const scheduledDate = new Date();
+      scheduledDate.setDate(scheduledDate.getDate() + 1);
+      scheduledDate.setHours(9, 0, 0, 0);
+
+      // Envoyer la demande à tous les déménageurs
+      const requests = allDemenageurs.map(demenageur => {
+        const serviceRequestData = {
+          serviceType: 'transport',
+          serviceDetails: {
+            article: formData.article,
+            serviceType: 'camion_seul',
+            isQuickService: true // Marquer comme service rapide
+          },
+          departureAddress: formData.adresseDepart,
+          destinationAddress: formData.destination,
+          demenageurId: demenageur.id,
+          scheduledDate: scheduledDate
+        };
+
+        return fetch(`${API_BASE_URL}/api/service-requests/create`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(serviceRequestData),
         });
-        
-        if (data.success && data.data && data.data.length > 0) {
-          // Filtrer les déménageurs qui ont des coordonnées valides
-          const demenageursWithCoords = data.data.filter(d => {
-            const hasLat = d.latitude || d.location?.lat;
-            const hasLng = d.longitude || d.location?.lng;
-            const isValid = hasLat && hasLng && !isNaN(parseFloat(hasLat)) && !isNaN(parseFloat(hasLng));
-            if (!isValid) {
-              console.log(`⚠️ Déménageur ${d.id} sans coordonnées valides:`, {
-                latitude: d.latitude,
-                longitude: d.longitude,
-                location: d.location
-              });
+      });
+
+      const results = await Promise.allSettled(requests);
+      
+      // Vérifier les réponses pour voir si elles sont réussies
+      const responseChecks = await Promise.all(
+        results.map(async (result) => {
+          if (result.status === 'fulfilled') {
+            try {
+              const response = result.value;
+              const data = await response.json();
+              return data.success === true;
+            } catch (e) {
+              return false;
             }
-            return isValid;
-          });
-          
-          console.log(`✅ Déménageurs avec coordonnées valides: ${demenageursWithCoords.length}/${data.data.length}`);
-          
-          if (demenageursWithCoords.length > 0) {
-            setDemenageurs(demenageursWithCoords);
-            
-            if (location && location.coords) {
-              const sorted = sortDemenageursByDistance(
-                demenageursWithCoords, 
-                location.coords.latitude, 
-                location.coords.longitude
-              );
-              console.log(`📊 Déménageurs triés par distance:`, sorted.map(d => ({
-                name: `${d.first_name || ''} ${d.last_name || ''}`.trim(),
-                company: d.company_name,
-                distance: d.distance?.toFixed(2)
-              })));
-              setSortedDemenageurs(sorted);
-            } else {
-              setSortedDemenageurs(demenageursWithCoords);
-            }
-          } else {
-            console.warn('⚠️ Aucun déménageur avec coordonnées valides trouvé');
-            setDemenageurs([]);
-            setSortedDemenageurs([]);
           }
-        } else {
-          console.warn('⚠️ Réponse API vide ou invalide:', data);
-          setDemenageurs([]);
-          setSortedDemenageurs([]);
-        }
+          return false;
+        })
+      );
+
+      const successful = responseChecks.filter(success => success === true).length;
+      const failed = allDemenageurs.length - successful;
+
+      if (successful > 0) {
+        Alert.alert(
+          'Demande envoyée !',
+          `Votre demande de transport rapide a été envoyée à ${successful} déménageur${successful > 1 ? 's' : ''}.${failed > 0 ? ` ${failed} envoi${failed > 1 ? 's' : ''} ont échoué.` : ''}`,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                setShowQuickTransportForm(false);
+              }
+            }
+          ]
+        );
       } else {
-        const errorText = await response.text();
-        console.error(`❌ Erreur HTTP ${response.status}:`, errorText);
-        throw new Error(`Erreur HTTP: ${response.status} ${response.statusText}`);
+        Alert.alert('Erreur', 'Aucune demande n\'a pu être envoyée. Veuillez réessayer.');
       }
     } catch (error) {
-      console.error('❌ Erreur de connexion API:', error);
-      console.error('❌ Détails:', error.message);
-      setErrorMsg(`Impossible de charger les déménageurs: ${error.message}`);
-      setDemenageurs([]);
-      setSortedDemenageurs([]);
+      console.error('Erreur lors de l\'envoi de la demande rapide:', error);
+      Alert.alert('Erreur', 'Erreur de connexion lors de l\'envoi de la demande');
     }
   };
+
 
   const handleWebViewMessage = (event) => {
     try {
@@ -364,15 +642,25 @@ const AccueilScreen = ({ authToken }) => {
   };
 
   // Vérifications et rendu conditionnel
-  if (errorMsg) {
+  // Ne pas bloquer l'affichage si on a des déménageurs même avec une erreur
+  if (errorMsg && demenageurs.length === 0 && sortedDemenageurs.length === 0) {
     return (
       <View style={styles.screen}>
         <Text style={styles.errorText}>{errorMsg}</Text>
+        <TouchableOpacity 
+          style={styles.retryButton}
+          onPress={() => {
+            setErrorMsg(null);
+            loadDemenageurs();
+          }}
+        >
+          <Text style={styles.retryButtonText}>Réessayer</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
-  if (loading || !location) {
+  if (loading) {
     return (
       <View style={styles.screen}>
         <Text style={styles.screenTitle}>{t('loading_map')}</Text>
@@ -381,7 +669,41 @@ const AccueilScreen = ({ authToken }) => {
     );
   }
 
-  const mapHTML = generateMapHTML(location.coords.latitude, location.coords.longitude, demenageurs);
+  const handleServiceTypeSelect = (type) => {
+    setServiceType(type);
+    setShowServiceTypeSelection(false);
+    setShowReservationForm(true);
+  };
+
+  const handleCloseServiceTypeSelection = () => {
+    setShowServiceTypeSelection(false);
+    setSelectedDemenageur(null);
+  };
+
+  if (showServiceTypeSelection && selectedDemenageur) {
+    return (
+      <ServiceTypeSelectionScreen
+        demenageur={selectedDemenageur}
+        onSelectServiceType={handleServiceTypeSelect}
+        onClose={handleCloseServiceTypeSelection}
+      />
+    );
+  }
+
+  const handleBackToServiceSelection = () => {
+    setShowReservationForm(false);
+    setShowServiceTypeSelection(true);
+  };
+
+  if (showQuickTransportForm) {
+    return (
+      <QuickTransportForm
+        onClose={() => setShowQuickTransportForm(false)}
+        onSubmit={handleQuickTransportSubmit}
+        authToken={authToken}
+      />
+    );
+  }
 
   if (showReservationForm && selectedDemenageur) {
     return (
@@ -390,7 +712,9 @@ const AccueilScreen = ({ authToken }) => {
         onClose={() => {
           setShowReservationForm(false);
           setSelectedDemenageur(null);
+          setServiceType('demenagement');
         }}
+        onBack={handleBackToServiceSelection}
         onSubmit={handleReservationSubmit}
         requestType={serviceType}
         setRequestType={setServiceType}
@@ -422,8 +746,10 @@ const AccueilScreen = ({ authToken }) => {
         )}
       </View>
       
-      {showList && sortedDemenageurs.length > 0 && (
+      {/* Afficher la liste si showList est true OU si le tutoriel est actif (pour que le tutoriel puisse pointer vers elle) */}
+      {(showList || (showTutorial && currentPage === 'Accueil')) && (
         <Animated.View 
+          ref={demenageurListRef}
           style={[
             styles.demenageursList,
             {
@@ -446,24 +772,33 @@ const AccueilScreen = ({ authToken }) => {
             showsVerticalScrollIndicator={false}
             horizontal={false}
           >
-            {sortedDemenageurs.map((demenageur) => (
-              <DemenageurItem 
-                key={demenageur.id} 
-                demenageur={demenageur}
-                onSelect={(d) => {
-                  setSelectedDemenageur(d);
-                  setShowReservationForm(true);
-                }}
-                t={t}
-                styles={styles}
-              />
-            ))}
+            {sortedDemenageurs.length > 0 ? (
+              sortedDemenageurs.map((demenageur) => (
+                <DemenageurItem 
+                  key={demenageur.id} 
+                  demenageur={demenageur}
+                  onSelect={(d) => {
+                    setSelectedDemenageur(d);
+                    setShowServiceTypeSelection(true);
+                  }}
+                  t={t}
+                  styles={styles}
+                />
+              ))
+            ) : (
+              <View style={styles.emptyListContainer}>
+                <Text style={styles.emptyListText}>
+                  {loading ? 'Chargement des déménageurs...' : 'Aucun déménageur disponible pour le moment'}
+                </Text>
+              </View>
+            )}
           </ScrollView>
         </Animated.View>
       )}
       
       {!showList && (
         <TouchableOpacity 
+          ref={showListButtonRef}
           style={styles.showListButton}
           onPress={showListAnimated}
         >
@@ -473,6 +808,18 @@ const AccueilScreen = ({ authToken }) => {
           </Text>
         </TouchableOpacity>
       )}
+
+      <TouchableOpacity 
+        ref={quickTransportButtonRef}
+        style={styles.quickTransportButton}
+        onPress={() => {
+          setShowQuickTransportForm(true);
+        }}
+      >
+        <Ionicons name="flash" size={20} color="#ffffff" />
+        <Text style={styles.quickTransportText}>Transport Rapide</Text>
+      </TouchableOpacity>
+
     </View>
   );
 };
@@ -663,6 +1010,56 @@ const styles = StyleSheet.create({
   mapTouchText: {
     color: '#ffffff',
     fontSize: 12,
+    fontWeight: 'bold',
+  },
+  quickTransportButton: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    backgroundColor: '#ff6b35',
+    borderRadius: 25,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    zIndex: 1001,
+  },
+  quickTransportText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  emptyListContainer: {
+    padding: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 150,
+  },
+  emptyListText: {
+    color: '#8e8e93',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: 20,
+    backgroundColor: '#ff6b35',
+    paddingHorizontal: 30,
+    paddingVertical: 12,
+    borderRadius: 25,
+    alignSelf: 'center',
+  },
+  retryButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
     fontWeight: 'bold',
   },
 });

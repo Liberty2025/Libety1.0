@@ -3,7 +3,7 @@ const pool = require('../db');
 
 async function addIdentityCardNumberColumn() {
   try {
-    console.log('🔍 Vérification de l\'existence de la colonne identity_card_number...');
+    console.log('🔍 Vérification de l\'existence de la colonne cin_number...');
     
     // Vérifier si la colonne existe déjà
     const columnExists = await pool.query(
@@ -11,23 +11,23 @@ async function addIdentityCardNumberColumn() {
        FROM information_schema.columns 
        WHERE table_schema = 'public' 
        AND table_name = 'users' 
-       AND column_name = 'identity_card_number'`
+       AND column_name = 'cin_number'`
     );
 
     if (columnExists.rows.length > 0) {
-      console.log('✅ La colonne identity_card_number existe déjà');
+      console.log('✅ La colonne cin_number existe déjà');
       return;
     }
 
-    console.log('📝 Ajout de la colonne identity_card_number à la table users...');
+    console.log('📝 Ajout de la colonne cin_number à la table users...');
     
-    // Ajouter la colonne identity_card_number
+    // Ajouter la colonne cin_number
     await pool.query(
       `ALTER TABLE users 
-       ADD COLUMN identity_card_number VARCHAR(20) UNIQUE`
+       ADD COLUMN cin_number VARCHAR(20) UNIQUE`
     );
 
-    console.log('✅ Colonne identity_card_number ajoutée avec succès');
+    console.log('✅ Colonne cin_number ajoutée avec succès');
 
     // Vérifier aussi si la colonne documents existe
     const documentsExists = await pool.query(

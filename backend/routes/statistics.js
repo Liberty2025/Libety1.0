@@ -38,29 +38,30 @@ router.get('/demenageur', authenticateToken, async (req, res) => {
       });
     }
 
-    // Récupérer toutes les missions du déménageur
+    // Récupérer toutes les missions du déménageur (utiliser quotes)
     const missions = await queryMany(
-      `SELECT sr.*, 
+      `SELECT q.*, 
               c.id as client_id, c.first_name as client_first_name, c.last_name as client_last_name
-       FROM service_requests sr
-       LEFT JOIN users c ON sr.client_id = c.id
-       WHERE sr.demenageur_id = $1
-       ORDER BY sr.created_at DESC`,
+       FROM quotes q
+       LEFT JOIN users c ON q.client_id = c.id
+       WHERE q.mover_id = $1
+       ORDER BY q.created_at DESC`,
       [demenageurId]
     );
 
     // Calculer les statistiques
     const totalMissions = missions.length;
-    const completedMissions = missions.filter(m => m.status === 'completed').length;
+    // Dans quotes, les statuts peuvent être différents, adapter selon votre logique métier
+    const completedMissions = missions.filter(m => m.status === 'completed' || m.status === 'accepted').length;
     const cancelledMissions = missions.filter(m => m.status === 'cancelled').length;
     const pendingMissions = missions.filter(m => m.status === 'pending').length;
     const acceptedMissions = missions.filter(m => m.status === 'accepted').length;
     const inProgressMissions = missions.filter(m => m.status === 'in_progress').length;
 
-    // Calculer les gains totaux
+    // Calculer les gains totaux (convertir price_cents en TND)
     const totalEarnings = missions
-      .filter(m => m.actual_price && m.status === 'completed')
-      .reduce((sum, m) => sum + parseFloat(m.actual_price || 0), 0);
+      .filter(m => m.price_cents && m.status === 'accepted')
+      .reduce((sum, m) => sum + (parseInt(m.price_cents || 0) / 100), 0);
 
     // Calculer le taux de completion
     const completionRate = totalMissions > 0 ? Math.round((completedMissions / totalMissions) * 100) : 0;
@@ -97,8 +98,8 @@ router.get('/demenageur', authenticateToken, async (req, res) => {
       });
       
       const monthEarnings = monthMissions
-        .filter(m => m.actual_price && m.status === 'completed')
-        .reduce((sum, m) => sum + parseFloat(m.actual_price || 0), 0);
+        .filter(m => m.price_cents && m.status === 'accepted')
+        .reduce((sum, m) => sum + (parseInt(m.price_cents || 0) / 100), 0);
       
       monthlyStats.push({
         month: date.toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' }),
@@ -108,18 +109,33 @@ router.get('/demenageur', authenticateToken, async (req, res) => {
     }
 
     // Missions récentes (dernières 5)
-    const recentMissions = missions.slice(0, 5).map(mission => ({
-      id: mission.id,
-      clientName: mission.client_first_name && mission.client_last_name 
-        ? `${mission.client_first_name} ${mission.client_last_name}` 
-        : 'Client inconnu',
-      serviceType: mission.service_type,
-      status: mission.status,
-      actualPrice: mission.actual_price ? parseFloat(mission.actual_price) : null,
-      createdAt: mission.created_at,
-      departureAddress: mission.departure_address,
-      destinationAddress: mission.destination_address
-    }));
+    const recentMissions = missions.slice(0, 5).map(mission => {
+      // Extraire serviceType depuis services JSONB
+      let services = mission.services;
+      if (typeof services === 'string') {
+        try {
+          services = JSON.parse(services);
+        } catch (e) {
+          services = {};
+        }
+      } else if (!services) {
+        services = {};
+      }
+      const serviceType = services.serviceType || 'demenagement';
+
+      return {
+        id: mission.id,
+        clientName: mission.client_first_name && mission.client_last_name 
+          ? `${mission.client_first_name} ${mission.client_last_name}` 
+          : 'Client inconnu',
+        serviceType: serviceType,
+        status: mission.status,
+        actualPrice: mission.price_cents ? parseInt(mission.price_cents) / 100 : null,
+        createdAt: mission.created_at,
+        departureAddress: mission.from_address,
+        destinationAddress: mission.to_address
+      };
+    });
 
     const statistics = {
       totalMissions,

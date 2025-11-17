@@ -32,6 +32,7 @@ const useWebSocket = (userData) => {
     // Événements de connexion
     newSocket.on('connect', () => {
       console.log('🔌 WebSocket connecté');
+      console.log('🔌 Socket ID:', newSocket.id);
       setIsConnected(true);
       console.log('🔑 Token envoyé:', userData.token ? 'PRÉSENT' : 'ABSENT');
     });
@@ -53,6 +54,12 @@ const useWebSocket = (userData) => {
       setIsConnected(false);
     });
 
+    // Vérifier si le socket est déjà connecté
+    if (newSocket.connected) {
+      console.log('✅ WebSocket déjà connecté');
+      setIsConnected(true);
+    }
+
     // Nettoyage à la déconnexion
     return () => {
       if (socketRef.current) {
@@ -70,15 +77,20 @@ const useWebSocket = (userData) => {
 
   const onEvent = (event, callback) => {
     if (socketRef.current) {
+      console.log(`📡 Enregistrement écouteur WebSocket pour: ${event}`);
       socketRef.current.on(event, (data) => {
+        console.log(`📨 Événement reçu: ${event}`, data);
         setLastUpdate(new Date());
         callback(data);
       });
+    } else {
+      console.warn(`⚠️ Impossible d'enregistrer l'écouteur ${event}: socket non disponible`);
     }
   };
 
   const offEvent = (event, callback) => {
     if (socketRef.current) {
+      console.log(`🧹 Désenregistrement écouteur WebSocket pour: ${event}`);
       socketRef.current.off(event, callback);
     }
   };

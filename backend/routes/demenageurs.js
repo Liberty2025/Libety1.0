@@ -18,12 +18,13 @@ function calculateDistance(lat1, lng1, lat2, lng2) {
 router.get('/', async (req, res) => {
   try {
     // Filtrer uniquement les déménageurs disponibles
+    // Note: Si aucun déménageur avec status='available', on peut aussi retourner ceux avec d'autres statuts pour le développement
     const demenageurs = await queryMany(
-      'SELECT id, first_name, last_name, email, phone, role, status, address, is_verified, created_at, updated_at FROM users WHERE role = $1 AND status = $2',
-      ['demenageur', 'available']
+      'SELECT id, first_name, last_name, email, phone, role, status, address, is_verified, created_at, updated_at FROM users WHERE role = $1 AND (status = $2 OR status = $3)',
+      ['demenageur', 'available', 'inactive'] // Inclure aussi 'inactive' temporairement pour le développement
     );
     
-    console.log(`📋 Déménageurs trouvés: ${demenageurs.length}`);
+    console.log(`📋 Déménageurs trouvés (available + inactive): ${demenageurs.length}`);
     
     // Enrichir avec les profils et localisations
     const demenageursWithDetails = await Promise.all(
@@ -47,9 +48,9 @@ router.get('/', async (req, res) => {
           status: demenageur.status,
           company_name: profile ? (profile.company_name || null) : null,
           rating: profile && profile.rating != null ? parseFloat(profile.rating) : 0,
-          total_reviews: profile && profile.total_reviews != null ? parseInt(profile.total_reviews) : 0,
-          experience_years: profile && profile.experience_years != null ? parseInt(profile.experience_years) : 0,
-          services_offered: profile ? (Array.isArray(profile.services_offered) ? profile.services_offered : []) : [],
+          total_reviews: 0, // Non stocké dans mover_profiles
+          experience_years: 0, // Non stocké dans mover_profiles
+          services_offered: profile && profile.truck_types ? (Array.isArray(profile.truck_types) ? profile.truck_types : []) : [],
           is_verified: demenageur.is_verified || false, // is_verified est dans la table users, pas mover_profiles
           // Retourner les coordonnées directement pour faciliter l'utilisation dans le frontend
           latitude: location ? parseFloat(location.lat) : null,
@@ -65,10 +66,17 @@ router.get('/', async (req, res) => {
       })
     );
 
+    // Filtrer pour ne retourner que ceux avec status='available' dans la réponse finale
+    // Mais si aucun 'available', retourner tous pour le développement
+    const availableDemenageurs = demenageursWithDetails.filter(d => d.status === 'available');
+    
+    console.log(`✅ Déménageurs disponibles (status='available'): ${availableDemenageurs.length}`);
+    console.log(`📊 Total déménageurs traités: ${demenageursWithDetails.length}`);
+
     res.json({
       success: true,
-      data: demenageursWithDetails,
-      count: demenageursWithDetails.length
+      data: availableDemenageurs.length > 0 ? availableDemenageurs : demenageursWithDetails, // Retourner tous si aucun 'available'
+      count: availableDemenageurs.length > 0 ? availableDemenageurs.length : demenageursWithDetails.length
     });
   } catch (error) {
     console.error('❌ Erreur dans /api/demenageurs:', error);
@@ -151,9 +159,9 @@ router.get('/nearby', async (req, res) => {
           distance: Math.round(distance * 100) / 100, // Arrondir à 2 décimales
           company_name: profile ? (profile.company_name || null) : null,
           rating: profile && profile.rating != null ? parseFloat(profile.rating) : 0,
-          total_reviews: profile && profile.total_reviews != null ? parseInt(profile.total_reviews) : 0,
-          experience_years: profile && profile.experience_years != null ? parseInt(profile.experience_years) : 0,
-          services_offered: profile ? (Array.isArray(profile.services_offered) ? profile.services_offered : []) : [],
+          total_reviews: 0, // Non stocké dans mover_profiles
+          experience_years: 0, // Non stocké dans mover_profiles
+          services_offered: profile && profile.truck_types ? (Array.isArray(profile.truck_types) ? profile.truck_types : []) : [],
           is_verified: demenageur.is_verified || false, // is_verified est dans la table users
           location: {
             lat: parseFloat(demenageur.location.lat),
@@ -222,11 +230,11 @@ router.get('/:id', async (req, res) => {
         company_name: profile ? (profile.company_name || null) : null,
         description: profile ? (profile.bio || null) : null,
         rating: profile && profile.rating != null ? parseFloat(profile.rating) : 0,
-        total_reviews: profile && profile.total_reviews != null ? parseInt(profile.total_reviews) : 0,
-        experience_years: profile && profile.experience_years != null ? parseInt(profile.experience_years) : 0,
-        services_offered: profile ? (Array.isArray(profile.services_offered) ? profile.services_offered : []) : [],
-        equipment_available: profile ? (Array.isArray(profile.equipment_available) ? profile.equipment_available : []) : [],
-        insurance_coverage: profile ? (profile.insurance_coverage || false) : false,
+        total_reviews: 0, // Non stocké dans mover_profiles
+        experience_years: 0, // Non stocké dans mover_profiles
+        services_offered: profile && profile.truck_types ? (Array.isArray(profile.truck_types) ? profile.truck_types : []) : [],
+        equipment_available: [], // Non stocké dans mover_profiles
+        insurance_coverage: profile && profile.insurance_certificate ? true : false,
         is_verified: demenageur.is_verified || false, // is_verified est dans la table users
         location: location ? {
           lat: parseFloat(location.lat),
